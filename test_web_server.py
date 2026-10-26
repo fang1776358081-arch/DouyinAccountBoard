@@ -34,7 +34,7 @@ class WebServiceTest(unittest.TestCase):
                     {'Origin': 'http://other.example'})
         with patch.dict(os.environ, {'DOUYIN_BOARD_SHARED_WEB':'1'}):
             self.assertEqual(self.call('/api/health'), dict(service='douyin-account-board', shared=True,
-                                                           authentication_required=True))
+                                                           authentication_required=True, board_guard='response-kept'))
 
     def test_configuration_never_creates_or_switches_database(self):
         with tempfile.TemporaryDirectory() as directory:

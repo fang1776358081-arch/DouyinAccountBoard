@@ -18,6 +18,11 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(accounts[2]['lifecycle'],'注册日期待补充')
         self.assertEqual(accounts[3]['effective_auxiliary_state'],'已注册')
         self.assertEqual(accounts[4]['lifecycle'],'小号')
+        broken=account('6','not-a-date')
+        lifecycle.enrich([broken],'2026-10-14')
+        self.assertEqual(broken['lifecycle'],'注册日期待补充')
+        self.assertIsNone(broken['days_remaining'])
+        self.assertEqual(broken['mature_on'],'')
 
     def test_phone_matching_and_relationship_validation(self):
         db=sqlite3.connect(':memory:');db.row_factory=sqlite3.Row

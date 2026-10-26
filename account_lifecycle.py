@@ -34,9 +34,13 @@ def enrich(accounts, today):
         a['mature_on'] = ''
         a['days_remaining'] = None
         if a['registered_on']:
-            mature = date.fromisoformat(a['registered_on']) + timedelta(days=30)
-            a['mature_on'] = mature.isoformat()
-            a['days_remaining'] = max(0, (mature - date.fromisoformat(today)).days)
+            try:
+                mature = date.fromisoformat(a['registered_on']) + timedelta(days=30)
+                a['mature_on'] = mature.isoformat()
+                a['days_remaining'] = max(0, (mature - date.fromisoformat(today)).days)
+            except (TypeError, ValueError):
+                a['mature_on'] = ''
+                a['days_remaining'] = None
         if a['account_type'] == '小号':
             a['lifecycle'] = '小号'
         elif a['account_type'] != '大号':
@@ -45,7 +49,7 @@ def enrich(accounts, today):
             a['lifecycle'] = '已注册辅助账号'
         elif a['effective_auxiliary_state'] == '暂无法注册':
             a['lifecycle'] = '暂无法注册'
-        elif not a['registered_on']:
+        elif not a['registered_on'] or a['days_remaining'] is None:
             a['lifecycle'] = '注册日期待补充'
         elif a['days_remaining'] > 0:
             a['lifecycle'] = '未满30天'

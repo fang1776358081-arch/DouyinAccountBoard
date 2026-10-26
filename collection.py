@@ -112,7 +112,8 @@ def heartbeat(db, status):
     return {'command':row[0]}
 
 def overview(db,accounts=None):
-    settings=dict(db.execute('SELECT * FROM collection_settings WHERE id=1').fetchone())
+    row=db.execute('SELECT * FROM collection_settings WHERE id=1').fetchone()
+    settings=dict(row) if row else dict(auto_enabled=0,paused=0,pause_reason='')
     settings['waiting']=db.execute("SELECT count(*) FROM collection_jobs WHERE state IN ('queued','running')").fetchone()[0]
     settings['linked']=db.execute("SELECT count(*) FROM accounts WHERE homepage<>'' OR douyin_id<>''").fetchone()[0]
     worker=db.execute('SELECT seen,status FROM collection_worker WHERE id=1').fetchone()

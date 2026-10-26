@@ -53,6 +53,52 @@ def versions(db,context=None):
     return {key:token(value) for key,value in records.items()}
 
 
+def version_identity(key):
+    if type(key) is not str or not key or len(key)>300 or ':' not in key:raise ValueError('资料版本编号不正确')
+    prefix,rest=key.split(':',1)
+    table={value:name for name,value in PREFIX.items()}.get(prefix)
+    if table is None or not rest:raise ValueError('资料版本编号不正确')
+    if table=='daily':
+        account_id,sep,day=rest.rpartition(':')
+        if not sep or not account_id or not day:raise ValueError('资料版本编号不正确')
+        return table,{'account_id':account_id,'day':day}
+    if table=='publishing_layout':
+        batch,sep,tail=rest.partition(':')
+        computer_id,sep2,slot=tail.rpartition(':')
+        if not sep or not sep2 or not batch or not computer_id or not slot:raise ValueError('资料版本编号不正确')
+        try:slot=int(slot)
+        except ValueError:raise ValueError('资料版本编号不正确') from None
+        return table,{'batch':batch,'computer_id':computer_id,'slot':slot}
+    return table,{TABLE_KEYS[table][0]:rest}
+
+
+def versions_for(db,keys,context=None):
+    if type(keys) is not list or len(keys)>80:raise ValueError('资料版本编号不正确')
+    scoped=getattr(db,'scope_enabled',False)
+    maps=None
+    if scoped:
+        import office_scope
+        maps=context['maps'] if context else office_scope.scope_maps(db)
+    result={}
+    for key in keys:
+        table,ident=version_identity(key)
+        columns=TABLE_KEYS[table]
+        row=db.execute('SELECT * FROM '+table+' WHERE '+' AND '.join(column+'=?' for column in columns),tuple(ident[column] for column in columns)).fetchone()
+        if row is None:
+            result[key]=None
+            continue
+        value=dict(row)
+        if row_key(table,value)!=key:raise ValueError('资料版本编号不正确')
+        if scoped:
+            import office_scope
+            value['office_ids']=office_scope.record_offices(maps,table,value)
+            if context is not None and not office_scope.record_visible(context,table,value):
+                result[key]=None
+                continue
+        result[key]=token(value)
+    return result
+
+
 def targets(db,path,body):
     if path=='/api/account/patch':
         changes=body.get('changes',{});ident=str(body.get('id',''))

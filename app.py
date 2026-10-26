@@ -86,6 +86,19 @@ def configure_database(provider):
 def today():
     return datetime.now(timezone(timedelta(hours=8))).date().isoformat()
 
+def picked(row, fields):
+    return {field: row[field] for field in fields if field in row}
+
+def workspace_summary(computers, accounts, card_info, device_info, layout_info, nurture_info):
+    return (
+        [picked(row, ('id', 'office_ids')) for row in computers],
+        [picked(row, ('id', 'name', 'status', 'lifecycle', 'published', 'computer_id', 'nurture_started', 'registration_phone', 'phone_device_id', 'office_ids', 'office_group')) for row in accounts],
+        dict(cards=[picked(row, ('id', 'phone', 'owner', 'code_state', 'return_state', 'return_due', 'code_note', 'status', 'office_ids')) for row in card_info['cards']]),
+        dict(devices=[picked(row, ('id', 'name', 'state', 'attention', 'office_ids')) for row in device_info['devices']]),
+        dict(enabled=bool(layout_info.get('enabled')), cells=[picked(row, ('account_id', 'label', 'reason', 'source_cell', 'office', 'computer_id', 'slot')) for row in layout_info.get('cells', [])]),
+        dict(records=[picked(row, ('account_id', 'completed_on', 'workflow', 'stage', 'started_on', 'verification_owner', 'verification_note')) for row in nurture_info['records']], today=nurture_info['today']),
+    )
+
 @contextmanager
 def connect():
     if _DATABASE_PROVIDER is not None:
@@ -171,6 +184,66 @@ class Handler(SimpleHTTPRequestHandler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, directory=str(interface_directory()), **kwargs)
 
+    def send_response(self, code, message=None):
+        self._response_started = True
+        super().send_response(code, message)
+
+    def handle_one_request(self):
+        # The 8-second timeout only covers a stalled request line. After the
+        # request is parsed, board assembly and the response write need longer.
+        # A timeout or any other escape used to close the socket before a status
+        # line, which the browser reports as "Failed to fetch".
+        self._response_started = False
+        try:
+            self.raw_requestline = self.rfile.readline(65537)
+            if len(self.raw_requestline) > 65536:
+                self.requestline = ''
+                self.request_version = ''
+                self.command = ''
+                self.send_error(414)
+                return
+            if not self.raw_requestline:
+                self.close_connection = True
+                return
+            if not self.parse_request():
+                return
+            try:
+                self.connection.settimeout(120)
+            except OSError:
+                pass
+            method = getattr(self, 'do_' + self.command, None)
+            if method is None:
+                self.send_error(501, 'Unsupported method (%r)' % self.command)
+                return
+            method()
+            self.wfile.flush()
+        except TimeoutError:
+            self.log_error('请求读写超时')
+            self._keep_error_response()
+        except Exception as error:
+            self.log_error('请求处理失败 %s', type(error).__name__)
+            self._keep_error_response()
+
+    def _keep_error_response(self):
+        if self._response_started:
+            self.close_connection = True
+            return
+        try:
+            self.connection.settimeout(30)
+        except OSError:
+            pass
+        try:
+            body = '{"error":"页面数据暂时读不出来，请稍后刷新"}'.encode()
+            self.send_response(500)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            self.wfile.flush()
+        except Exception:
+            self.close_connection = True
+
     def end_headers(self):
         if not urlparse(self.path).path.startswith('/api/'):
             self.send_header('Cache-Control', 'no-store')
@@ -214,7 +287,13 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         try:
+            self.connection.settimeout(120)
+        except OSError:
+            pass
+        try:
             return self.get_response()
+        except AdmissionRejected:
+            return self.reply({'error':'数据服务正忙，请稍后刷新','code':'DB_CONNECTION_LIMIT'},503)
         except transient_errors() as error:
             return self.database_failure(error)
         except auth.AccessError as error:
@@ -268,7 +347,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if not row or row['mode']!='open':return self.reply({'ready':False,'code':'NOT_READY'},503)
                 return self.reply({'ready':True})
         if parsed.path=='/api/health':
-            return self.reply({'service':'douyin-account-board','shared':os.environ.get('DOUYIN_BOARD_SHARED_WEB')=='1','authentication_required':True})
+            return self.reply({'service':'douyin-account-board','shared':os.environ.get('DOUYIN_BOARD_SHARED_WEB')=='1','authentication_required':True,'board_guard':'response-kept'})
         if parsed.path=='/api/idempotency/result':
             try:
                 with connect() as db:
@@ -338,18 +417,34 @@ class Handler(SimpleHTTPRequestHandler):
             with connect() as db:
                 actor=auth.session(db,self.headers.get('Cookie'))
                 if not actor:return self.reply({'error':'请先登录工作台'},401)
-                board_updates.publish(operations.token(operations.versions(db)))
+                if board_updates.current() is None:
+                    board_updates.publish(operations.token(operations.versions(db)))
             if known==board_updates.current():return self.reply(board_updates.wait(known, actor))
             return self.reply({'version':board_updates.current()})
+        if parsed.path == '/api/record-versions':
+            with connect() as db:
+                begin_read(db)
+                actor=auth.session(db,self.headers.get('Cookie'))
+                if not actor:return self.reply({'error':'请先登录工作台'},401)
+                keys=[part for part in parse_qs(parsed.query).get('keys',[''])[0].split(',') if part]
+                context=office_scope.read_context(db,actor) if getattr(db,'scope_enabled',False) else None
+                try:found=operations.versions_for(db,keys,context)
+                except ValueError:return self.reply({'error':'资料版本编号不正确'},400)
+            return self.reply({'record_versions':found})
         if parsed.path != '/api/board':
             if parsed.path.startswith('/api/'):return self.reply({'error':'接口不存在'},404)
             return super().do_GET()
         with connect() as db:
             actor=auth.session(db,self.headers.get('Cookie'))
         if not actor:return self.reply({'error':'请先登录工作台'},401)
+        view=parse_qs(parsed.query).get('view',[''])[0]
+        if view not in ('','work','detail'):return self.reply({'error':'读取范围不正确'},400)
+        day = parse_qs(parsed.query).get('date', [today()])[0]
         try:
-            day = parse_qs(parsed.query).get('date', [today()])[0]
             date.fromisoformat(day)
+        except ValueError:
+            return self.reply({'error':'日期格式不正确'}, 400)
+        try:
             with connect() as db:
                 begin_read(db)
                 actor=auth.session(db,self.headers.get('Cookie'))
@@ -359,7 +454,7 @@ class Handler(SimpleHTTPRequestHandler):
                 accounts = [dict(r) for r in db.execute('SELECT a.*,COALESCE(d.published,0) AS published FROM accounts a LEFT JOIN daily d ON d.account_id=a.id AND d.day=? ORDER BY '+integer_order(db,'a.computer_id')+',a.slot', (day,))]
                 context=office_scope.read_context(db,actor) if getattr(db,'scope_enabled',False) else None
                 if context:computers,accounts=office_scope.filter_board_entities(context,computers,accounts)
-                collection_info=collection.overview(db,accounts if context else None)
+                collection_info=None if view else collection.overview(db,accounts if context else None)
                 account_lifecycle.enrich(accounts, today())
                 card_info=phone_cards.overview(db,context['ids']['cards'] if context else None,accounts if context else None)
                 device_info=phone_devices.overview(db,accounts,context['ids']['devices'] if context else None)
@@ -367,12 +462,18 @@ class Handler(SimpleHTTPRequestHandler):
                     for kind,rows in [('cards',card_info['cards']),('devices',device_info['devices'])]:
                         for row in rows:row['office_ids']=context['maps'][kind].get(row['id'],[])
                 layout_info=publishing_layout.overview(db,context['ids']['accounts'] if context else None,context['ids']['computers'] if context else None)
-                record_versions=operations.versions(db,context)
-                nurture_info=nurture.overview(db,today(),context['ids']['accounts'] if context else None)
+                record_versions={} if view else operations.versions(db,context)
+                nurture_info=nurture.overview(db,today(),context['ids']['accounts'] if context else None,view!='work')
                 offices=office_scope.list_offices(db,actor) if context else []
-            self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup.status(),phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices))
-        except ValueError:
-            self.reply({'error':'日期格式不正确'}, 400)
+            if view=='work':
+                computers,accounts,card_info,device_info,layout_info,nurture_info=workspace_summary(computers,accounts,card_info,device_info,layout_info,nurture_info)
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='summary'))
+            elif view=='detail':
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='detail'))
+            else:
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup.status(),phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices))
+        except AdmissionRejected:
+            raise
 
     def is_worker(self):
         return bool(WORKER_TOKEN) and auth.hmac.compare_digest(self.headers.get('X-Worker-Token',''),WORKER_TOKEN)

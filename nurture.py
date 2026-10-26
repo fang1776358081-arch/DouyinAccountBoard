@@ -64,7 +64,8 @@ def sync(db,today,account_ids=None):
         if account_ids is not None and account['id'] not in account_ids:continue
         record=db.execute('SELECT * FROM nurture_records WHERE account_id=?',(account['id'],)).fetchone()
         started=account['nurture_started'] or account['registered_on']
-        recent=bool(started and 0<=(date.fromisoformat(today)-date.fromisoformat(started)).days<7)
+        try:recent=bool(started and 0<=(date.fromisoformat(today)-date.fromisoformat(started)).days<7)
+        except (TypeError,ValueError):recent=False
         if not record and (account['status']=='养号7天' or recent):
             db.execute('INSERT INTO nurture_records(account_id,legacy_started_on) VALUES(?,?)',(account['id'],started))
         elif record and not record['completed_on'] and record['workflow']=='待开始' and record['started_on']:
@@ -73,14 +74,17 @@ def sync(db,today,account_ids=None):
             pause(db,record,today)
             db.execute("UPDATE nurture_records SET verification_state='待检查',verification_updated_on=? WHERE account_id=?",(today,account['id']))
 
-def overview(db,today,allowed_accounts=None):
+def overview(db,today,allowed_accounts=None,images=True):
+    records=[dict(row) for row in db.execute('SELECT * FROM nurture_records') if allowed_accounts is None or row['account_id'] in allowed_accounts]
+    statuses={row['id']:row['status'] for row in db.execute('SELECT id,status FROM accounts')} if records else {}
+    grouped={}
+    if images and records:
+        for row in db.execute('SELECT id,account_id,cycle,day,actor FROM nurture_images ORDER BY account_id,cycle,day,id'):
+            grouped.setdefault(row['account_id'],{}).setdefault(row['cycle'],[]).append(dict(id=row['id'],day=row['day'],actor=row['actor'],cycle=row['cycle']))
     result=[]
-    for row in db.execute('SELECT * FROM nurture_records'):
-        if allowed_accounts is not None and row['account_id'] not in allowed_accounts:continue
-        item=dict(row);start=item['started_on']
+    for item in records:
         days=elapsed(item,today)
-        status_row=db.execute('SELECT status FROM accounts WHERE id=?',(item['account_id'],)).fetchone()
-        status=status_row[0] if status_row else ''
+        status=statuses.get(item['account_id'],'')
         stage=('已结束' if item['completed_on'] else '状态待核对' if status not in USABLE else
                '养号暂停' if item['workflow']=='暂停' else '核对处理中' if item['verification_state']=='核对处理中' else
                '待检查' if item['verification_state']=='待检查' else '待开始养号' if item['workflow']=='待开始' else
@@ -98,8 +102,10 @@ def overview(db,today,allowed_accounts=None):
             except (TypeError,ValueError):day=None
             while day is not None and len(day_dates)<7:day_dates.append(day.isoformat());day+=timedelta(days=1)
         item.update(elapsed=days,remaining_days=max(0,7-days),due_on=due,stage=stage,day_dates=day_dates)
-        item['images']=[dict(r) for r in db.execute('SELECT id,day,actor FROM nurture_images WHERE account_id=? AND cycle=? ORDER BY day,id',(item['account_id'],item['cycle']))]
-        item['past_images']=[dict(r) for r in db.execute('SELECT id,day,actor,cycle FROM nurture_images WHERE account_id=? AND cycle<>? ORDER BY cycle,day,id',(item['account_id'],item['cycle']))]
+        if images:
+            cycles=grouped.get(item['account_id'],{})
+            item['images']=[{'id':image['id'],'day':image['day'],'actor':image['actor']} for image in cycles.get(item['cycle'],[])]
+            item['past_images']=[image for cycle,images_for_cycle in cycles.items() if cycle!=item['cycle'] for image in images_for_cycle]
         result.append(item)
     return dict(records=result,today=today,verification_states=VERIFICATION)
 
