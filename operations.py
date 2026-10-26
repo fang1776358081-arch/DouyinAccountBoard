@@ -9,6 +9,10 @@ from datetime import date,timedelta
 TABLE_KEYS={'computers':['id'],'accounts':['id'],'phone_cards':['id'],'phone_devices':['id'],'daily':['account_id','day'],
             'publishing_layout':['batch','computer_id','slot'],'nurture_records':['account_id']}
 PREFIX={'computers':'computer','accounts':'account','phone_cards':'card','phone_devices':'device','daily':'daily','publishing_layout':'layout','nurture_records':'nurture'}
+WORKFLOW_TABLE_KEYS={'phone_units':['id'],'phone_card_placements':['card_id'],
+                     'phone_account_access':['account_id'],'device_cases':['id'],'device_workflow_events':['id']}
+PREFIX.update(phone_units='unit',phone_card_placements='placement',phone_account_access='access',
+              device_cases='case',device_workflow_events='workflow_event')
 
 
 class ConflictError(ValueError):pass
@@ -16,7 +20,7 @@ class ConflictError(ValueError):pass
 
 def encoded(value):return json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':'))
 def token(value):return hashlib.sha256(encoded(value).encode()).hexdigest()
-def row_key(table,row):return PREFIX[table]+':'+':'.join(str(row[key]) for key in TABLE_KEYS[table])
+def row_key(table,row):return PREFIX[table]+':'+':'.join(str(row[key]) for key in {**TABLE_KEYS,**WORKFLOW_TABLE_KEYS}[table])
 
 
 def migrate(db):
@@ -36,7 +40,9 @@ def snapshot(db):
     if scoped:
         import office_scope
         maps=office_scope.scope_maps(db)
-    for table in TABLE_KEYS:
+    import device_workflow
+    tables = {**TABLE_KEYS, **(WORKFLOW_TABLE_KEYS if device_workflow.available(db) else {})}
+    for table in tables:
         for row in db.execute('SELECT * FROM '+table):
             value=dict(row)
             if scoped:value['office_ids']=office_scope.record_offices(maps,table,value)
@@ -100,6 +106,9 @@ def versions_for(db,keys,context=None):
 
 
 def targets(db,path,body):
+    if path=='/api/device-workflow':
+        import device_workflow
+        return device_workflow.version_keys(db,body)
     if path=='/api/account/patch':
         changes=body.get('changes',{});ident=str(body.get('id',''))
         keys=targets(db,'/api/account',{**changes,'id':ident})
@@ -110,7 +119,8 @@ def targets(db,path,body):
         return sorted(set(keys))
     if path=='/api/batch-edit':
         import batch_edit
-        return batch_edit.keys(body)
+        import device_workflow
+        return sorted(set(batch_edit.keys(body) + device_workflow.legacy_version_keys(db,path,body)))
     keys=[];ident=str(body.get('id',''))
     if path.startswith('/api/workspace/nurture/'):keys+=['account:'+ident,'nurture:'+ident]
     if path in ['/api/account','/api/account/status','/api/account/card-readiness','/api/lifecycle-status','/api/account/phone-device','/api/account/nurture']:
@@ -125,7 +135,8 @@ def targets(db,path,body):
     if path=='/api/publishing/assignment':
         for computer,slot in [(body.get('computer_id'),body.get('slot')),(body.get('target_computer'),body.get('target_slot'))]:
             if computer is not None and slot is not None:keys.append('layout:'+str(body.get('batch'))+':'+str(computer)+':'+str(slot))
-    return keys
+    import device_workflow
+    return sorted(set(keys + device_workflow.legacy_version_keys(db,path,body)))
 
 
 def before(db,path,body):

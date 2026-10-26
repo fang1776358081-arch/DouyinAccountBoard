@@ -7,7 +7,7 @@ function workspaceTodos(board){
  for(const account of board.accounts){
   const scheduled=board.publishing_layout?.enabled?assigned.has(account.id):account.computer_id!=='unassigned';
   if((board.nurture?.records||[]).some(record=>record.account_id===account.id&&record.completed_on)&&!scheduled&&account.status==='正常')accountTask(account,'nurture_schedule','养号结束待安排发布','已转正常，但当前工作进度布局没有发布位置，请补安排后重新导入或核对关联');
-  if(scheduled&&!nurturing.has(account.id)&&!account.published&&!['封禁','停用','发不了','短期封禁'].includes(account.status))accountTask(account,'publish','待记录发布',board.date+' 尚未记录已发布');
+  if(scheduled&&!nurturing.has(account.id)&&!account.published&&!['封禁','停用','发不了','短期封禁'].includes(account.status)&&account.device_access?.login_state!=='登录受阻')accountTask(account,'publish','待记录发布',board.date+' 尚未记录已发布');
   if(account.lifecycle==='满30天未注册')accountTask(account,'aux','满30天待开小号','按已登记注册日期计算，实际创建需人工确认');
   const nurture=nurturing.get(account.id);
   if(nurture&&'workflow' in nurture){
@@ -26,5 +26,10 @@ function workspaceTodos(board){
   for(const [active,kind,title] of [[card.code_state==='待接码','code','待接码'],[card.return_state==='待归还','return','待归还手机卡'],[card.status==='待注销','cancel','待处理卡注销记录']])if(active)tasks.push({kind,title,name:card.phone+' · '+(card.owner||'卡主待确认'),reason:kind==='return'&&card.return_due?'预计归还 '+card.return_due:card.code_note||'请核对实际情况后处理',card_id:card.id,offices,office:offices[0]||'pending'});
  }
  for(const phone of board.phone_devices?.devices||[])if(phone.state==='待清理')tasks.push({kind:'clean',title:'手机待清理确认',name:phone.name,reason:phone.attention||'核对实物并清理后，再人工标记可用闲置',device_id:phone.id,offices:phone.office_ids,office:Array.isArray(phone.office_ids)?workspaceOffice(phone):workspaceOffice({phone_device_id:phone.id})});
+ if(board.device_workflow?.enabled)for(const item of board.device_workflow.todos||[]){
+  const account=board.accounts.find(row=>String(row.id)===String(item.account_id)),unit=(board.device_workflow.units||[]).find(row=>String(row.id)===String(item.unit_id)),device=(board.phone_devices?.devices||[]).find(row=>row.id===unit?.device_id),related=account||device||{};
+  const followup=item.followup_on?`下次跟进 ${item.followup_on}${item.followup_on<=board.today?'（已到跟进日）':''}`:'';
+  tasks.push({kind:item.kind,title:item.kind==='device_case'?'设备故障待处理':'账号登录待恢复',name:account?'#'+account.id+' '+account.name:unit?.label||item.title,reason:[item.reason,item.owner?'负责人 '+item.owner:'',followup].filter(Boolean).join('；'),account_id:item.account_id,case_id:item.kind==='device_case'?item.id:item.case_id,device_id:unit?.device_id,office:workspaceOffice(related),offices:related.office_ids});
+ }
  return tasks;
 }

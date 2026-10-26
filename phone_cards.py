@@ -2,7 +2,7 @@
 from datetime import date
 
 STATES = ['待确认', '正常', '欠费', '停机', '停用', '待注销', '已注销']
-CARRIERS = ['待确认', '中国移动', '中国联通', '中国电信', '中国广电', '其他']
+CARRIERS = ['待确认', '中国移动', '中国联通', '中国电信', '中国广电', '民生电信', '长城移动', '其他']
 OWNERSHIPS = ['待确认', '自有', '借用', '代管']
 CODE_STATES = ['无待办', '待接码', '已完成', '暂无法接码']
 RETURN_STATES = ['待确认', '不需归还', '待归还', '已归还']
@@ -33,12 +33,27 @@ def valid_phone(phone):
     return len(phone) == 11 and phone.isascii() and phone.isdigit() and phone.startswith('1')
 
 
+def carrier_value(body, default='待确认'):
+    value = body.get('carrier', default)
+    custom = body.get('custom_carrier', '')
+    if not isinstance(value, str) or not isinstance(custom, str):
+        raise ValueError('运营商名称格式不正确')
+    value, custom = value.strip(), custom.strip()
+    if custom:
+        if value != '其他':raise ValueError('自定义运营商请选择“其他”')
+        value = custom
+    if not 1 <= len(value) <= 40 or any(ord(character) < 32 for character in value):
+        raise ValueError('运营商名称需为1至40字，不能包含换行')
+    return value
+
+
 def overview(db, allowed_ids=None, accounts=None):
     cards = [dict(row) for row in db.execute('SELECT * FROM phone_cards ORDER BY id DESC')]
     if allowed_ids is not None:cards=[row for row in cards if row['id'] in allowed_ids]
     known = {card['phone'] for card in cards}
     phones = {row['registration_phone'] for row in accounts if row['registration_phone']} if accounts is not None else {row[0] for row in db.execute("SELECT DISTINCT registration_phone FROM accounts WHERE registration_phone<>''")}
-    return dict(cards=cards, statuses=STATES, carriers=CARRIERS, ownerships=OWNERSHIPS,code_states=CODE_STATES,return_states=RETURN_STATES,
+    carriers = CARRIERS[:-1] + sorted({row['carrier'] for row in cards} - set(CARRIERS)) + ['其他']
+    return dict(cards=cards, statuses=STATES, carriers=carriers, ownerships=OWNERSHIPS,code_states=CODE_STATES,return_states=RETURN_STATES,
                 importable=sum(valid_phone(phone) and phone not in known for phone in phones))
 
 
@@ -66,9 +81,9 @@ def save(db, body, actor=None):
         if len(value) > limit:
             raise ValueError('手机卡字段内容过长，请缩短后保存')
         values[key] = value
-    carrier = body.get('carrier', '待确认')
+    carrier = carrier_value(body, old['carrier'] if old else '待确认')
     status = body.get('status', '待确认')
-    if carrier not in CARRIERS or status not in STATES:
+    if status not in STATES:
         raise ValueError('运营商或手机卡状态不正确')
     expires = str(body.get('expires_on', '')).strip()
     if expires:

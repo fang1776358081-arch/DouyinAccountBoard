@@ -72,8 +72,14 @@ def save(db, body, create=False, actor=None):
     state_source='auto' if state=='auto' else 'manual'
     if state=='auto':state='待确认'
     if state not in STATES:raise ValueError('手机设备状态不正确')
-    if state=='可用闲置' and db.execute('SELECT 1 FROM accounts WHERE phone_device_id=?',(device_id,)).fetchone():
-        raise ValueError('仍有当前账号关联，请先移出账号并确认清理完成，再标记可用闲置')
+    if state=='可用闲置':
+        import device_workflow
+        if device_workflow.available(db):
+            linked=db.execute('SELECT 1 FROM phone_account_access a JOIN phone_units u ON u.id=a.last_unit_id WHERE u.device_id=? AND u.active=1',(device_id,)).fetchone()
+            has_card=db.execute('SELECT 1 FROM phone_card_placements p JOIN phone_units u ON u.id=p.unit_id WHERE u.device_id=? AND u.active=1',(device_id,)).fetchone()
+        else:
+            linked=db.execute('SELECT 1 FROM accounts WHERE phone_device_id=?',(device_id,)).fetchone();has_card=False
+        if linked or has_card:raise ValueError('仍有当前账号或手机卡关联，请先移出并确认清理完成，再标记可用闲置')
     values=[]
     for field,limit in [('name',100),('owner',100),('location',200),('note',2000)]:
         value=str(body.get(field,'')).strip()
@@ -86,6 +92,12 @@ def save(db, body, create=False, actor=None):
     else:
         db.execute('UPDATE phone_devices SET name=?,state=?,state_source=?,owner=?,location=?,note=? WHERE id=?',(name,state,state_source,owner,location,note,device_id))
     if scoped:office_scope.save_assignment(db,actor,'devices',device_id,body,create)
+    import device_workflow
+    if device_workflow.available(db):
+        unit=device_workflow.ensure_unit(db,device_id)
+        if unit['status']!=state and (not old or state!=old['state'] or state_source!=old['state_source']):
+            device_workflow._unit_status(db,actor or {'id':None,'name':'设备资料登记'},
+                                        {'unit_id':unit['id'],'status':state,'note':unit['note']})
     return device_id
 
 
@@ -99,6 +111,8 @@ def assign(db, account_id, value, source='manual'):
         if target['state']=='故障' and account['phone_device_id']!=device_id:
             raise ValueError('该手机标记为故障，请先核对设备状态')
     if account['phone_device_id']==device_id:return
+    import device_workflow
+    device_workflow.sync_assignment(db,str(account_id),device_id)
     db.execute('UPDATE accounts SET phone_device_id=?,phone_device_source=? WHERE id=?',(device_id,source,str(account_id)))
     if device_id:
         db.execute('UPDATE accounts SET office_group=? WHERE id=?',('three' if device_id.startswith('office3:') else '',str(account_id)))

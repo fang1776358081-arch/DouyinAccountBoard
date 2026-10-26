@@ -3,7 +3,7 @@ function hasPermission(key){return !!(data?.user||currentUser)?.permissions.incl
 function applyPermissions(){
  currentUser=data.user;
  $('currentUser').textContent=currentUser?`${currentUser.name} · ${{owner:'总管理员',admin:'管理员',employee:'员工',viewer:'只读人员'}[currentUser.role]}`:'';
- $('manageUsers').hidden=currentUser?.role!=='owner';$('permissionsNav').hidden=currentUser?.role!=='owner';
+ $('manageUsers').hidden=currentUser?.role!=='owner';$('permissionsNav').hidden=currentUser?.role!=='owner';$('backupNav').hidden=currentUser?.role!=='owner';
  for(const [id,key] of [['newAccount','account_create'],['newCard','card_create'],['newPhoneDevice','device_create']])$(id).hidden=!hasPermission(key);
  for(const [id,key] of [['applyBulk','account_status'],['bulkStatus','account_status'],['pauseCollect','collection_manage'],['cancelCollect','collection_manage'],['collectSelected','collection_manage'],['collectVisible','collection_manage'],['autoCollect','collection_manage'],['resumeCollect','collection_manage'],['openCollector','collection_manage']])$(id).disabled=!hasPermission(key);
  $('importCards').disabled=!hasPermission('card_import')||!data.phone_cards?.importable;

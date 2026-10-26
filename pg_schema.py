@@ -3,7 +3,7 @@ import hashlib
 from pathlib import Path
 
 MIGRATIONS = Path(__file__).resolve().parent / 'migrations/postgresql'
-FILES = ('0001_legacy_baseline.sql', '0002_office_scope.sql', '0003_idempotency.sql')
+FILES = ('0001_legacy_baseline.sql', '0002_office_scope.sql', '0003_idempotency.sql', '0004_device_workflow.sql')
 
 
 def expected_versions():

@@ -8,14 +8,14 @@ ROOT = Path(__file__).resolve().parent
 PYTHON_FILES = '''app.py web_server.py auth.py account_service.py account_lifecycle.py
 backup.py backup_management.py batch_edit.py collection.py data_exchange.py
 nurture.py operations.py phone_cards.py phone_devices.py publishing_layout.py
-workspace_service.py release_policy.py sql_dialect.py office_scope.py idempotency.py'''.split()
+workspace_service.py release_policy.py sql_dialect.py office_scope.py idempotency.py device_workflow.py'''.split()
 STATIC_FILES = '''app.js auth-ui.js auth.css batch-edit.css batch-edit.js board-fit.css
 collection-panel.js edit-versions.js field-search.css field-search.js identity-labels.js
 index.html lifecycle.js login.html login.js nurture.js offices.js phone-cards.js
 phone-devices.js publishing-layout.js publishing-match.css publishing-match.js
 publishing-pending.css publishing-pending.js styles.css users.css users.html users.js
 verification.css verification.js scope-ui.js workspace-model.js workspace-shortcuts.js workspace.css
-workspace.html workspace.js'''.split()
+workspace.html workspace.js device-workflow.js device-workflow.css'''.split()
 FILES = tuple(PYTHON_FILES + ['static/' + name for name in STATIC_FILES])
 
 

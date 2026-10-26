@@ -263,11 +263,18 @@ def require_stored_action(user, path):
         if any(item in user['permissions'] for item in batch_edit.BATCH_PERMISSIONS):return
         require(user,'account_status')
         return
+    if path=='/api/device-workflow':
+        require(user,'device_manage')
+        return
     if path not in ACTION_PERMISSIONS:raise AccessError('接口未开放',404)
     require(user,ACTION_PERMISSIONS[path])
 
 
 def authorize_route(db,user,path,body):
+    if path=='/api/device-workflow':
+        import device_workflow
+        device_workflow.authorize(db,user,body)
+        return
     if getattr(db,'scope_enabled',False):
         import office_scope
         office_scope.authorize_route(db,user,path,body)
@@ -286,7 +293,11 @@ def authorize_route(db,user,path,body):
         return
     routes=ACTION_PERMISSIONS
     if path=='/api/phone-card':
+        import phone_cards
         old=db.execute('SELECT * FROM phone_cards WHERE id=?',(body.get('id'),)).fetchone()
+        if 'custom_carrier' in body:
+            body={**body,'carrier':phone_cards.carrier_value(body,old['carrier'] if old else '待确认')}
+            body.pop('custom_carrier',None)
         if not old and not body.get('id'):
             require(user,'card_create')
             return

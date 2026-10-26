@@ -1,6 +1,7 @@
 """Synthetic-only migration rehearsal. Not a production migration entrypoint."""
 import json
 import os
+import time
 import uuid
 from pathlib import Path
 import psycopg
@@ -10,11 +11,14 @@ from pg_schema import apply_migrations
 
 MIGRATIONS = PROJECT / 'migrations/postgresql'
 SCHEMA = 'board_candidate'
-TABLES = ('computers', 'phone_devices', 'accounts', 'daily', 'imports', 'auth_users',
+LEGACY_TABLES = ('computers', 'phone_devices', 'accounts', 'daily', 'imports', 'auth_users',
           'auth_sessions', 'auth_setup', 'auth_limits', 'auth_audit', 'auth_migrations',
           'phone_cards', 'collection_jobs', 'collection_settings', 'collection_worker',
           'publishing_layout', 'publishing_layout_state', 'publishing_layout_links',
           'operations_history', 'operations_previews', 'nurture_records', 'nurture_images')
+WORKFLOW_TABLES = ('phone_units', 'device_cases', 'phone_card_placements',
+                   'phone_account_access', 'device_workflow_events')
+TABLES = LEGACY_TABLES + WORKFLOW_TABLES
 IDENTITIES = ('auth_users', 'auth_audit', 'phone_cards', 'operations_history')
 
 
@@ -59,10 +63,7 @@ def copy_synthetic(conn, source):
 
 
 def _copy_snapshot(conn, source):
-    actual = source.execute('SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name').fetchall()
-    expected = json.loads((MIGRATIONS / 'legacy-sqlite-schema.json').read_text(encoding='utf-8-sig'))
-    if [list(row) for row in actual] != expected:
-        raise ValueError('Unreviewed SQLite schema; migration refused')
+    source_tables = reviewed_source_tables(source)
     with conn.transaction():
         conn.execute('SET LOCAL search_path=board_candidate,pg_catalog')
         conn.execute('SET CONSTRAINTS accounts_parent_account_id_fkey DEFERRED')
@@ -74,25 +75,17 @@ def _copy_snapshot(conn, source):
             if conn.execute(sql.SQL('SELECT 1 FROM {} LIMIT 1').format(sql.Identifier(table))).fetchone():
                 raise ValueError('Migration target must be empty')
         counts = {}
-        for table in TABLES:
+        for table in source_tables:
             cursor = source.execute('SELECT * FROM "' + table + '"')
             columns = [column[0] for column in cursor.description]
-            target_columns = [row[0] for row in conn.execute(
-                'SELECT column_name FROM information_schema.columns WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position',
-                (SCHEMA, table))]
             extras = {'auth_users': ['authorization_version'], 'operations_history': ['scope_offices']}.get(table, [])
-            if columns + extras != target_columns:
-                raise ValueError('Column drift: ' + table)
             rows = [tuple(row) for row in cursor.fetchall()]
-            query = sql.SQL('INSERT INTO {} ({}) VALUES ({})').format(sql.Identifier(table),
-                sql.SQL(',').join(map(sql.Identifier, columns)), sql.SQL(',').join(sql.Placeholder() for _ in columns))
-            with conn.cursor() as target:
-                target.executemany(query, rows)
-            # Compare full values, including bytes, NULL and empty strings, before commit.
-            copied = conn.execute(sql.SQL('SELECT {} FROM {}').format(sql.SQL(',').join(map(sql.Identifier, columns)), sql.Identifier(table))).fetchall()
-            if sorted(rows, key=repr) != sorted(copied, key=repr):
-                raise ValueError('Field mismatch: ' + table)
+            _write_verified_rows(conn, table, columns, rows, extras)
             counts[table] = len(rows)
+        if source_tables == LEGACY_TABLES:
+            # 0004 ran while the target was empty. Its backfill must happen
+            # after legacy rows are copied, in this same verified transaction.
+            counts.update(_backfill_legacy_workflow(conn, source))
         for table in IDENTITIES:
             maximum = conn.execute(sql.SQL('SELECT max(id) FROM {}').format(sql.Identifier(table))).fetchone()[0]
             # RESTART is transactional, unlike setval; failed rehearsals must not leak sequence changes.
@@ -100,6 +93,77 @@ def _copy_snapshot(conn, source):
             conn.execute(sql.SQL('ALTER SEQUENCE {} RESTART WITH {}').format(
                 sql.Identifier(*sequence.split('.')), sql.Literal(max(1, (maximum or 0) + 1))))
     return counts
+
+
+def _write_verified_rows(conn, table, columns, rows, extras=()):
+    target_columns = [row[0] for row in conn.execute(
+        'SELECT column_name FROM information_schema.columns WHERE table_schema=%s AND table_name=%s ORDER BY ordinal_position',
+        (SCHEMA, table))]
+    if list(columns) + list(extras) != target_columns:
+        raise ValueError('Column drift: ' + table)
+    query = sql.SQL('INSERT INTO {} ({}) VALUES ({})').format(sql.Identifier(table),
+        sql.SQL(',').join(map(sql.Identifier, columns)), sql.SQL(',').join(sql.Placeholder() for _ in columns))
+    with conn.cursor() as target:
+        target.executemany(query, rows)
+    # Compare full values, including bytes, NULL and empty strings, before commit.
+    copied = conn.execute(sql.SQL('SELECT {} FROM {}').format(
+        sql.SQL(',').join(map(sql.Identifier, columns)), sql.Identifier(table))).fetchall()
+    if sorted(rows, key=repr) != sorted(copied, key=repr):
+        raise ValueError('Field mismatch: ' + table)
+
+
+def _backfill_legacy_workflow(conn, source):
+    """Apply 0004's reviewed derivation after copying an audited 22-table source.
+
+    Only explicit device assignments establish last-known physical identities.
+    Card free text is never inferred; login is left unconfirmed. Returned counts
+    include these derived target rows, not just literal rows in the old source.
+    """
+    columns = {
+        'phone_units': ['id', 'device_id', 'original_device_id', 'generation', 'active',
+                        'status', 'model', 'note', 'created_at', 'revision'],
+        'device_cases': ['id', 'unit_id', 'status', 'reason', 'owner', 'followup_on', 'note',
+                         'closure_reason', 'created_at', 'updated_at', 'closed_at', 'revision', 'account_ids'],
+        'phone_card_placements': ['card_id', 'unit_id', 'slot', 'storage', 'updated_at', 'revision'],
+        'phone_account_access': ['account_id', 'last_unit_id', 'target_unit_id', 'login_state', 'recovery_state',
+                                 'reason', 'owner', 'followup_on', 'case_id', 'confirmed_at', 'revision'],
+        'device_workflow_events': ['id', 'case_id', 'unit_id', 'card_id', 'account_id',
+                                   'actor_id', 'actor_name', 'at', 'action', 'detail'],
+    }
+    now = int(time.time())
+    devices = source.execute('SELECT id,state FROM phone_devices ORDER BY id').fetchall()
+    known_devices = {row[0] for row in devices}
+    expected = {table: [] for table in WORKFLOW_TABLES}
+    expected['phone_units'] = [
+        ('legacy-unit:' + ident, ident, ident, 1, 1, status, '',
+         '由原设备编号建立，实物资料待核对', now, 0) for ident, status in devices]
+    expected['phone_account_access'] = [
+        (ident, 'legacy-unit:' + device_id, None, '待确认', '待处理', '', '', '', None, 0, 0)
+        for ident, device_id in source.execute('SELECT id,phone_device_id FROM accounts ORDER BY id')
+        if device_id in known_devices]
+    counts = {}
+    for table in WORKFLOW_TABLES:
+        _write_verified_rows(conn, table, columns[table], expected[table])
+        counts[table] = len(expected[table])
+    return counts
+
+
+def reviewed_source_tables(source):
+    """Accept only a complete audited schema, including exact index SQL.
+
+    The device workflow file is an explicit additive audit profile. Existing
+    definitions must remain byte-for-byte equal to the immutable legacy review;
+    unknown objects or altered columns never pass by being ignored or filtered.
+    """
+    actual = source.execute('SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY type,name').fetchall()
+    actual = [list(row) for row in actual]
+    legacy = json.loads((MIGRATIONS / 'legacy-sqlite-schema.json').read_text(encoding='utf-8-sig'))
+    if actual == legacy:
+        return LEGACY_TABLES
+    additions = json.loads((MIGRATIONS / 'device-workflow-sqlite-schema.json').read_text(encoding='utf-8-sig'))
+    if actual == sorted(legacy + additions, key=lambda row: (row[0], row[1])):
+        return TABLES
+    raise ValueError('Unreviewed SQLite schema; migration refused')
 
 
 def first_cutover_synthetic(conn, source):

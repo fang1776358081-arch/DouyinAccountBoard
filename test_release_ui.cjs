@@ -1,5 +1,13 @@
 // Synthetic DOM-only checks; no browser profile, server, database or external network.
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+for(const file of ['static/index.html','static/workspace.html','static/users.html']){
+  const html=fs.readFileSync(file,'utf8');
+  assert.match(html,/class="side-nav"/);
+  assert.equal((html.match(/class="nav-group"/g)||[]).length,3);
+  assert.equal((html.match(/name="workspace-navigation"/g)||[]).length,3);
+  for(const title of ['日常工作','资料管理','管理工具'])assert.match(html,new RegExp('>'+title+'<'));
+}
+assert.doesNotMatch(fs.readFileSync('static/workspace.html','utf8'),/class="workspace-tabs"/);
 const fields={},field=id=>fields[id]??={textContent:'',disabled:false,hidden:false};
 const state={can_manage:true,collection:{enabled:false,worker_online:false,worker_status:'disabled',waiting:1,done:1,failed:1,paused:false}};
 const context={document:{getElementById:field,visibilityState:'visible'},setInterval(){},fetch:async()=>({ok:true,json:async()=>state}),send:async()=>{throw Error('No write expected');}};

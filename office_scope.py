@@ -150,10 +150,15 @@ def scope_maps(db):
         for row in db.execute('SELECT ' + key + ',office_id FROM ' + mapping):
             values.setdefault(row[0], []).append(row[1])
         result[kind] = {ident: sorted(offices) for ident, offices in values.items()}
+    import device_workflow
+    if device_workflow.available(db):device_workflow.enrich_scope_maps(db,result)
     return result
 
 
 def record_offices(maps, table, row):
+    if table in ('phone_units','phone_card_placements','phone_account_access','device_cases','device_workflow_events'):
+        import device_workflow
+        return device_workflow.record_offices(maps,table,row)
     kind = {'accounts':'accounts','phone_cards':'cards','phone_devices':'devices','computers':'computers'}.get(table)
     if kind:
         return maps[kind].get(row['id'], [])
@@ -176,6 +181,9 @@ def read_context(db, actor):
 def record_visible(context, table, row):
     if context['global_access']:
         return True
+    if table in ('phone_units','phone_card_placements','phone_account_access','device_cases','device_workflow_events'):
+        import device_workflow
+        return device_workflow.record_visible(context,table,row)
     kind = {'accounts':'accounts','phone_cards':'cards','phone_devices':'devices','computers':'computers'}.get(table)
     if kind:
         return row['id'] in context['ids'][kind]

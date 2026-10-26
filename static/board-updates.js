@@ -17,7 +17,7 @@ function applyRemoteBoardUpdate(update){
  }
 }
 function boardData(){if(typeof data!=='undefined'&&data)return data;return globalThis.data;}
-function boardEditorOpen(){const lookup=typeof $==='function'?$:id=>document.getElementById(id);return ['editor','cardEditor','phoneDeviceEditor','publishingMatchDialog','verificationEditor','batchEditor'].some(id=>lookup(id)?.open);}
+function boardEditorOpen(){const lookup=typeof $==='function'?$:id=>document.getElementById(id);return !!globalThis.DeviceWorkflow?.isOpen()||['editor','cardEditor','phoneDeviceEditor','publishingMatchDialog','verificationEditor','batchEditor'].some(id=>lookup(id)?.open);}
 function rememberBoardVersion(entity,version){const state=boardData();if(!entity||version==null||!state)return;state.record_versions={...(state.record_versions||{}),[entity]:version};}
 function applyListedChange(list,id,after,removed){if(!Array.isArray(list))return;const index=list.findIndex(item=>String(item.id)===String(id));if(removed){if(index>=0)list.splice(index,1);return;}if(!after)return;if(index>=0){const row=list[index];for(const key of Object.keys(after))if(key in row)row[key]=after[key];}else list.push(after);}
 function applyCaughtChange(change){
@@ -61,7 +61,7 @@ async function catchUpBoard(){
   if(response.status===404){if(!boardEditorOpen()&&typeof load==='function')await load();return;}
   const payload=await response.json().catch(()=>null);
   if(!response.ok||!payload||boardSerial()!==serial)return;
-  if(payload.reload){if(!boardEditorOpen()&&typeof load==='function')await load();return;}
+  if(payload.reload||(payload.changes||[]).some(change=>/^(unit|placement|access|case|workflow_event):/.test(String(change?.entity||'')))){if(!boardEditorOpen()&&typeof load==='function')await load();return;}
   for(const change of payload.changes||[])applyCaughtChange(change);
   const latest=boardData();
   if(Number.isInteger(payload.cursor)&&latest&&latest.cursor===requested)latest.cursor=payload.cursor;

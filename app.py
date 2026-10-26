@@ -19,6 +19,7 @@ import account_lifecycle
 import backup
 import phone_cards
 import phone_devices
+import device_workflow
 import auth
 import publishing_layout
 import operations
@@ -92,7 +93,8 @@ def picked(row, fields):
 def workspace_summary(computers, accounts, card_info, device_info, layout_info, nurture_info):
     return (
         [picked(row, ('id', 'office_ids')) for row in computers],
-        [picked(row, ('id', 'name', 'status', 'lifecycle', 'published', 'computer_id', 'nurture_started', 'registration_phone', 'phone_device_id', 'office_ids', 'office_group')) for row in accounts],
+        [{**picked(row, ('id', 'name', 'status', 'lifecycle', 'published', 'computer_id', 'nurture_started', 'registration_phone', 'phone_device_id', 'office_ids', 'office_group')),
+          'device_access': picked(row['device_access'], ('login_state', 'recovery_state')) if row.get('device_access') else None} for row in accounts],
         dict(cards=[picked(row, ('id', 'phone', 'owner', 'code_state', 'return_state', 'return_due', 'code_note', 'status', 'office_ids')) for row in card_info['cards']]),
         dict(devices=[picked(row, ('id', 'name', 'state', 'attention', 'office_ids')) for row in device_info['devices']]),
         dict(enabled=bool(layout_info.get('enabled')), cells=[picked(row, ('account_id', 'label', 'reason', 'source_cell', 'office', 'computer_id', 'slot')) for row in layout_info.get('cells', [])]),
@@ -166,6 +168,7 @@ def initialize():
         publishing_layout.migrate(db)
         operations.migrate(db)
         nurture.migrate(db)
+        device_workflow.migrate(db)
         nurture.sync(db,today())
         # Collection is disabled; retained task states are historical, not executable leases.
 
@@ -484,6 +487,7 @@ class Handler(SimpleHTTPRequestHandler):
                 account_lifecycle.enrich(accounts, today())
                 card_info=phone_cards.overview(db,context['ids']['cards'] if context else None,accounts if context else None)
                 device_info=phone_devices.overview(db,accounts,context['ids']['devices'] if context else None)
+                workflow_info=device_workflow.overview(db,accounts,device_info['devices'],card_info['cards'],actor=actor)
                 if context:
                     for kind,rows in [('cards',card_info['cards']),('devices',device_info['devices'])]:
                         for row in rows:row['office_ids']=context['maps'][kind].get(row['id'],[])
@@ -494,11 +498,11 @@ class Handler(SimpleHTTPRequestHandler):
                 sync_cursor=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
             if view=='work':
                 computers,accounts,card_info,device_info,layout_info,nurture_info=workspace_summary(computers,accounts,card_info,device_info,layout_info,nurture_info)
-                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='summary'))
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),phone_cards=card_info,phone_devices=device_info,device_workflow=dict(enabled=workflow_info['enabled'],todos=workflow_info['todos'],units=[picked(unit,('id','device_id','label')) for unit in workflow_info['units']]),user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='summary'))
             elif view=='detail':
-                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='detail'))
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='detail'))
             else:
-                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup.status(),phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices,cursor=sync_cursor))
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup.status(),phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices,cursor=sync_cursor))
         except AdmissionRejected:
             raise
 
@@ -629,6 +633,7 @@ class Handler(SimpleHTTPRequestHandler):
                 result = {**result, '_record_versions': self._version_delta}
             idempotency.complete(db, actor, body, 'succeeded', 200, result)
             db.execute('RELEASE SAVEPOINT idem_business')
+            if path=='/api/device-workflow':board_updates.notify_reload(db)
             db.commit()
             return self.reply(result)
         except AdmissionRejected:
@@ -690,6 +695,17 @@ class Handler(SimpleHTTPRequestHandler):
                     actor=auth.session(db,self.headers.get('Cookie'));auth.require(actor)
                     if not auth.hmac.compare_digest(self.headers.get('X-CSRF-Token',''),actor['csrf']):raise auth.AccessError('页面已过期，请刷新后重试')
                     auth.authorize_route(db,actor,self.path,body)
+                if self.path=='/api/device-workflow':
+                    idempotency.request_uuid(body.get('request_id'))
+                    if getattr(db,'restore_generation',None):
+                        return self.idempotent_create(db,actor,self.path,body,lambda database,current:device_workflow.post(database,current,body,today()))
+                    change_state=operations.before(db,self.path,body)
+                    result=device_workflow.post(db,actor,body,today())
+                    operations.finish(self,db,actor,self.path,change_state)
+                    auth.audit(db,actor,self.path,str(body.get('action','')))
+                    board_updates.notify_reload(db)
+                    db.commit()
+                    return self.reply(result)
                 if self.path=='/api/account/create' and getattr(db,'restore_generation',None) and not body.get('request_id'):
                     db.rollback()
                     return self.reply({'error':'新增账号必须带请求标识','code':'REQUEST_ID_REQUIRED'},400)

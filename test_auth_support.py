@@ -44,7 +44,9 @@ def client(base,username='test_owner',password=TEST_PASSWORD):
                     keys+=['device:'+str(value) for value in [old.get('phone_device_id'),body.get('phone_device_id')] if value]
                 if path=='/api/publishing/assignment':
                     keys+=['layout:'+str(body.get('batch'))+':'+str(computer)+':'+str(slot) for computer,slot in [(body.get('computer_id'),body.get('slot')),(body.get('target_computer'),body.get('target_slot'))] if computer is not None and slot is not None]
-                body['_expected_versions']={key:board['record_versions'].get(key) for key in keys}
+                # This small, generated fixture can send the complete snapshot;
+                # the production UI selects only the touched physical records.
+                body['_expected_versions']=dict(board['record_versions']) if board.get('device_workflow',{}).get('enabled') else {key:board['record_versions'].get(key) for key in keys}
                 request.data=json.dumps(body).encode()
         return original_open(request,*args,**kwargs)
     opener.open=versioned_open
