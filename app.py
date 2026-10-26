@@ -413,7 +413,18 @@ class Handler(SimpleHTTPRequestHandler):
                 job=collection.next_job(db,today())
             return self.reply({'job':job})
         if parsed.path == '/api/board-updates':
-            known=parse_qs(parsed.query).get('version',[''])[0]
+            query=parse_qs(parsed.query)
+            if 'cursor' in query:
+                with connect() as db:
+                    begin_read(db)
+                    actor=auth.session(db,self.headers.get('Cookie'))
+                    if not actor:return self.reply({'error':'请先登录工作台'},401)
+                    try:cursor=int(query['cursor'][0])
+                    except ValueError:return self.reply({'error':'同步记号不正确'},400)
+                    try:found=board_updates.since(db,cursor,actor)
+                    except ValueError:return self.reply({'error':'同步记号不正确'},400)
+                return self.reply(found)
+            known=query.get('version',[''])[0]
             with connect() as db:
                 actor=auth.session(db,self.headers.get('Cookie'))
                 if not actor:return self.reply({'error':'请先登录工作台'},401)
@@ -431,6 +442,21 @@ class Handler(SimpleHTTPRequestHandler):
                 try:found=operations.versions_for(db,keys,context)
                 except ValueError:return self.reply({'error':'资料版本编号不正确'},400)
             return self.reply({'record_versions':found})
+        if parsed.path == '/api/daily-flags':
+            day = parse_qs(parsed.query).get('date', [today()])[0]
+            try:
+                date.fromisoformat(day)
+            except ValueError:
+                return self.reply({'error':'日期格式不正确'}, 400)
+            with connect() as db:
+                begin_read(db)
+                actor=auth.session(db,self.headers.get('Cookie'))
+                if not actor:return self.reply({'error':'请先登录工作台'},401)
+                rows=db.execute('SELECT a.id, COALESCE(d.published,0) FROM accounts a LEFT JOIN daily d ON d.account_id=a.id AND d.day=?',(day,)).fetchall()
+                if getattr(db,'scope_enabled',False):
+                    allowed=office_scope.visible_ids(db,actor,'accounts')
+                    rows=[row for row in rows if row[0] in allowed]
+            return self.reply({'date':day,'published':{str(row[0]):bool(row[1]) for row in rows}})
         if parsed.path != '/api/board':
             if parsed.path.startswith('/api/'):return self.reply({'error':'接口不存在'},404)
             return super().do_GET()
@@ -465,13 +491,14 @@ class Handler(SimpleHTTPRequestHandler):
                 record_versions={} if view else operations.versions(db,context)
                 nurture_info=nurture.overview(db,today(),context['ids']['accounts'] if context else None,view!='work')
                 offices=office_scope.list_offices(db,actor) if context else []
+                sync_cursor=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
             if view=='work':
                 computers,accounts,card_info,device_info,layout_info,nurture_info=workspace_summary(computers,accounts,card_info,device_info,layout_info,nurture_info)
                 self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='summary'))
             elif view=='detail':
                 self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='detail'))
             else:
-                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup.status(),phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices))
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup.status(),phone_cards=card_info,phone_devices=device_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices,cursor=sync_cursor))
         except AdmissionRejected:
             raise
 

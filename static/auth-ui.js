@@ -40,7 +40,7 @@ function applyDevicePermissions(){
 }
 document.addEventListener('DOMContentLoaded',()=>{
  $('manageUsers').onclick=$('permissionsNav').onclick=()=>{location.href='/users.html';};
- $('logout').onclick=async()=>{try{await api('/api/auth/logout',{});location.replace('/login.html');}catch(error){toast(error.message);}};
+ $('logout').onclick=async()=>{try{if(typeof clearBoardCache==='function')clearBoardCache();await api('/api/auth/logout',{});location.replace('/login.html');}catch(error){toast(error.message);}};
  $('changeOwnPassword').onclick=()=>{$('passwordForm').reset();$('passwordError').textContent='';$('passwordDialog').showModal();};
  $('closePassword').onclick=()=>{$('passwordForm').reset();$('passwordDialog').close();};
  $('passwordForm').onsubmit=async event=>{

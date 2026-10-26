@@ -179,7 +179,8 @@ def history(db,entity='',before_id=0,actor=None):
                     (entity,'',entity,'nurture:'+account_id if account_id else '',daily_prefix,'',daily_prefix,account_id,account_id,account_id,before_id,before_id)).fetchall()
     result=[]
     for row in rows:
-        value=dict(row);old=json.loads(value.pop('before_json'));new=json.loads(value.pop('after_json'))
+        if str(row['entity']).startswith('sync:'):continue
+        value=dict(row);old=json.loads(value.pop('before_json') or 'null');new=json.loads(value.pop('after_json') or 'null')
         if context is not None and not context['global_access']:
             try:scopes=json.loads(value.get('scope_offices') or 'null')
             except (ValueError,TypeError):continue

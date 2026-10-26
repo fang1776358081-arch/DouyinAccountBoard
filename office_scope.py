@@ -123,6 +123,8 @@ def grant_user(db, actor, user_id, office_ids):
         db.execute('INSERT INTO user_office_grants VALUES(?,?)', (user_id, office_id))
     version = db.execute('UPDATE auth_users SET authorization_version=authorization_version+1 WHERE id=? RETURNING authorization_version', (user_id,)).fetchone()[0]
     db.execute('DELETE FROM auth_sessions WHERE user_id=?', (user_id,))
+    import board_updates
+    board_updates.note_grant_change(db, old, wanted)
     detail = json.dumps(dict(user_id=user_id, before=sorted(old), after=sorted(wanted), authorization_version=version), ensure_ascii=False)
     db.execute('INSERT INTO auth_audit(at,actor_id,actor_name,action,target) VALUES(?,?,?,?,?)',
                (int(time.time()), actor['id'], actor['name'], '更新办公室授权', detail))

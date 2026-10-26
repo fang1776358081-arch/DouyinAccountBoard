@@ -46,6 +46,8 @@ class BoardUpdatesTest(unittest.TestCase):
         self.old_db=app.DB;self.old_worker=app.WORKER_TOKEN
         app.DB=self.root/'board.db';app.WORKER_TOKEN='test-local-worker'
         self.addCleanup(self._restore_app)
+        board_updates._pending=None
+        board_updates._version=None
         app.initialize()
         self.server=ThreadingHTTPServer(('127.0.0.1',0),app.Handler)
         self.addCleanup(self.server.server_close)
@@ -218,6 +220,146 @@ class BoardUpdatesTest(unittest.TestCase):
         self.assertNotIn('removed',got_b)
         self.assertEqual(got_a['version'],got_b['version'])
         self.assertNotEqual(got_a['version'],known)
+
+    def test_office_move_and_revoked_grant_follow_the_cursor(self):
+        owner={'role':'owner','office_ids':[]}
+        office_a={'role':'employee','office_ids':['A']}
+        office_b={'role':'employee','office_ids':['B']}
+        office_c={'role':'employee','office_ids':['C']}
+        with app.connect() as db:
+            start=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+            board_updates.note_grant_change(db,['A'],['A'])
+            self.assertEqual(db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0],start)
+            board_updates.notify_office_move(db,'43',previous_offices=['A'],next_offices=['B'])
+            board_updates.notify_office_move(db,'39',previous_offices=['A'],next_offices=[])
+            moved=board_updates.since(db,start,office_a)
+            gained=board_updates.since(db,start,office_b)
+            other=board_updates.since(db,start,office_c)
+            seen=board_updates.since(db,start,owner)
+            cursor=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+            board_updates.note_grant_change(db,['A','B'],['B'])
+            revoked=board_updates.since(db,cursor,office_a)
+        self.assertFalse(moved.get('reload'))
+        self.assertEqual([(item['entity'],item['kind']) for item in moved['changes']],[('account:43','remove'),('account:39','remove')])
+        self.assertEqual([(item['entity'],item['kind']) for item in gained['changes']],[('account:43','change')])
+        self.assertEqual(gained['changes'][0]['after']['id'],'43')
+        self.assertNotIn('account:39',[item['entity'] for item in gained['changes']])
+        self.assertEqual(other['changes'],[])
+        self.assertEqual([item['entity'] for item in seen['changes']],['account:43','account:39'])
+        self.assertTrue(all(item['kind']=='change' for item in seen['changes']))
+        self.assertTrue(revoked.get('reload'))
+        self.assertNotIn('changes',revoked)
+        import subprocess
+        harness=r'''
+const fs=require('fs');const vm=require('vm');
+const source=fs.readFileSync('static/board-updates.js','utf8');
+function run(mode){
+  const context={console};context.globalThis=context;vm.createContext(context);
+  const script=`
+    var data={accounts:[{id:'43',name:'jia',note:'OLD',published:false},{id:'39',name:'yi',note:'KEEP',published:false}],cursor:4,date:'2026-10-26',record_versions:{'account:43':'opened'}};
+    globalThis.data=data;var requestSerial=0;var loads=0;
+    document={getElementById(){return {open:false};}};
+    function render(){}
+    async function load(){loads++;data={accounts:[{id:'39',name:'yi',note:'KEEP',published:false}],cursor:9,date:'2026-10-26',computers:[],statuses:[],user:{id:1},record_versions:{}};globalThis.data=data;}
+    fetch=async()=>({status:200,ok:true,json:async()=>__MODE__==='reload'?{reload:true,cursor:9}:{cursor:6,changes:[{entity:'account:43',kind:'remove',after:null},{entity:'account:40',kind:'change',after:{id:'40',name:'xin',note:'MOVED',published:false},record_version:'moved'}]}});
+    ${source}
+    __ready=catchUpBoard().then(()=>({ids:data.accounts.map(account=>account.id),loads,moved:(data.accounts.find(account=>account.id==='40')||{}).note,kept:(data.accounts.find(account=>account.id==='39')||{}).note}));
+  `.replace('__MODE__',JSON.stringify(mode));
+  vm.runInContext(script,context);
+  return context.__ready;
+}
+(async()=>{
+  const moved=await run('move');
+  if(moved.loads!==0)throw new Error('office move reloaded the whole board');
+  if(moved.ids.includes('43')||moved.ids.join(',')!=='39,40')throw new Error('old office kept the row or new office missed it: '+moved.ids.join(','));
+  if(moved.moved!=='MOVED'||moved.kept!=='KEEP')throw new Error('office move changed the wrong row');
+  const revoked=await run('reload');
+  if(revoked.loads!==1||revoked.ids.join(',')!=='39')throw new Error('revoked grant did not replace the cached board');
+})().catch(error=>{console.error(error&&error.stack||error);process.exit(1);});
+'''
+        completed=subprocess.run(['node','-e',harness],cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=20)
+        self.assertEqual(completed.returncode,0,(completed.stderr or completed.stdout).strip())
+
+    def test_end_to_end_six_checks(self):
+        client=test_auth_support.owner_client(app,self.base)
+        owner={'role':'owner','office_ids':[]}
+        with client.open(self.base+'/api/board',timeout=5) as response:
+            board=json.load(response)
+        self.assertIsInstance(board['cursor'],int)
+        self.assertGreater(len(board['accounts']),1)
+        start=board['cursor']
+        def save(ident,note):
+            with client.open(self.base+'/api/board',timeout=5) as response:
+                current=json.load(response)
+            account=next(row for row in current['accounts'] if row['id']==ident)
+            request=urllib.request.Request(self.base+'/api/account',data=json.dumps({**account,'note':note}).encode(),headers={'Content-Type':'application/json'})
+            with client.open(request,timeout=5) as response:
+                self.assertEqual(response.status,200)
+        save('43','端到端甲')
+        save('39','端到端乙')
+        with app.connect() as db:
+            caught=board_updates.since(db,start,owner)
+        accounts=[item for item in caught['changes'] if item['entity'].startswith('account:')]
+        self.assertEqual([item['entity'] for item in accounts],['account:43','account:39'])
+        self.assertEqual([item['after']['note'] for item in accounts],['端到端甲','端到端乙'])
+        self.assertFalse(caught.get('reload'))
+        with app.connect() as db:
+            first=db.execute("SELECT MIN(id) FROM operations_history WHERE id>? AND entity='account:43'",(start,)).fetchone()[0]
+            db.execute('DELETE FROM operations_history WHERE id=?',(first,))
+            truncated=board_updates.since(db,first,owner)
+        self.assertTrue(truncated.get('reload'))
+        self.assertNotIn('changes',truncated)
+        with app.connect() as db:
+            cursor=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+            board_updates.notify_office_move(db,'43',previous_offices=['A'],next_offices=['B'])
+            hidden=board_updates.since(db,cursor,{'role':'employee','office_ids':['C']})
+            lost=board_updates.since(db,cursor,{'role':'employee','office_ids':['A']})
+            board_updates.note_grant_change(db,['A'],[])
+            revoked=board_updates.since(db,lost['cursor'],{'role':'employee','office_ids':['A']})
+        self.assertEqual(hidden['changes'],[])
+        self.assertEqual(lost['changes'][0]['kind'],'remove')
+        self.assertEqual(lost['changes'][0]['entity'],'account:43')
+        self.assertTrue(revoked.get('reload'))
+        self.assertNotIn('changes',revoked)
+        stale=urllib.request.Request(self.base+'/api/account',data=json.dumps({'id':'43','note':'不会写上','_expected_versions':{'account:43':'stale-token'}}).encode(),headers={'Content-Type':'application/json'})
+        with self.assertRaises(urllib.error.HTTPError) as rejected:
+            client.open(stale,timeout=5)
+        self.assertEqual(rejected.exception.code,409)
+        with app.connect() as db:
+            self.assertEqual(db.execute("SELECT note FROM accounts WHERE id='43'").fetchone()[0],'端到端甲')
+        import subprocess
+        harness=r'''
+const fs=require('fs');const path=require('path');const vm=require('vm');
+const root=process.cwd();
+const versions=fs.readFileSync(path.join(root,'static','edit-versions.js'),'utf8');
+const updates=fs.readFileSync(path.join(root,'static','board-updates.js'),'utf8');
+const context={console};context.globalThis=context;vm.createContext(context);
+vm.runInContext(versions+'\n'+updates+`
+let data={accounts:[{id:'43',name:'jia',note:'OLD',published:false},{id:'39',name:'yi',note:'OLD',published:false}],cursor:4,date:'2026-10-26',record_versions:{'account:43':'opened','account:39':'opened'}};
+const $=id=>({open:id==='editor',value:'FORM-NOTE'});
+document={getElementById(){return {open:false};}};
+function render(){}
+let loads=0;
+async function load(){loads++;}
+const before=data.accounts.map(account=>account.note);
+captureVersions('editor');
+fetch=async()=>({status:200,ok:true,json:async()=>({cursor:6,changes:[
+ {entity:'account:43',kind:'change',after:{id:'43',note:'端到端甲'},record_version:'remote-a'},
+ {entity:'account:39',kind:'change',after:{id:'39',note:'端到端乙'},record_version:'remote-b'}
+]})});
+__ready=catchUpBoard().then(()=>{
+ if(before.join(',')!=='OLD,OLD')throw new Error('reopen did not start from the previous board');
+ if(loads!==0)throw new Error('reopen reloaded the whole board');
+ const notes=data.accounts.map(account=>account.note).join(',');
+ if(notes!=='端到端甲,端到端乙')throw new Error('reopen did not apply only the missed rows');
+ if($('editNote').value!=='FORM-NOTE')throw new Error('remote update changed the editor text');
+ if(capturedVersions.get('editor')['account:43']!=='opened')throw new Error('remote update changed the editor version');
+});
+`,context);
+context.__ready.then(()=>process.exit(0),error=>{console.error(error&&error.stack||error);process.exit(1);});
+'''
+        completed=subprocess.run(['node','-e',harness],cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=20)
+        self.assertEqual(completed.returncode,0,(completed.stderr or completed.stdout).strip())
 
     def test_save_response_includes_changed_record(self):
         client=test_auth_support.owner_client(app,self.base)
@@ -646,10 +788,294 @@ updates,
 "const snapshot=capturedVersions.get('editor');",
 "if(!snapshot||snapshot['account:43']!=='opened')throw new Error('remote update changed capturedVersions');",
 "const row=data.accounts.find(account=>account.id==='43');",
-"if(!row||row.note!=='REMOTE'||row.phone_device_name!=='REMOTE-DEVICE')throw new Error('remote update did not apply the account');"
+"if(!row||row.note!=='REMOTE'||row.phone_device_name!=='REMOTE-DEVICE')throw new Error('remote update did not apply the account');",
+"data.accounts.push({id:'39',note:'KEEP'});",
+"applyRemoteBoardUpdate({removed:'39'});",
+"if(data.accounts.some(account=>account.id==='39'))throw new Error('old office row was not removed');",
+"if(!data.accounts.some(account=>account.id==='43'))throw new Error('removal deleted a different account');",
+"if(capturedVersions.get('editor')['account:43']!=='opened')throw new Error('removal changed the editor version');",
+"applyRemoteBoardUpdate({account:{id:'40',note:'ADDED',phone_device_name:'NEW-DEVICE'},record_version:'added-v'});",
+"const added=data.accounts.find(account=>account.id==='40');",
+"if(!added||added.note!=='ADDED')throw new Error('new office did not receive the account');",
+"if(capturedVersions.get('editor')['account:43']!=='opened')throw new Error('added account changed the editor version');"
 ].join('\n');
 try{vm.runInContext(script,context);}
 catch(error){console.error(error&&error.stack||error);process.exit(1);}
+'''
+        completed=subprocess.run(['node','-e',harness],cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=20)
+        self.assertEqual(completed.returncode,0,(completed.stderr or completed.stdout).strip())
+
+    def test_focus_applies_one_change_without_full_board(self):
+        client=test_auth_support.owner_client(app,self.base)
+        with client.open(self.base+'/api/board',timeout=5) as response:
+            board=json.load(response)
+        with app.connect() as db:
+            self.assertEqual(board['cursor'],db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0])
+        import subprocess
+        harness=r'''
+const fs=require('fs');
+const path=require('path');
+const vm=require('vm');
+const root=process.cwd();
+const versions=fs.readFileSync(path.join(root,'static','edit-versions.js'),'utf8');
+const appSource=fs.readFileSync(path.join(root,'static','app.js'),'utf8');
+const updatesSource=fs.readFileSync(path.join(root,'static','board-updates.js'),'utf8');
+const context={console,setImmediate};
+context.globalThis=context;
+context.window=context;
+context.__updatesSource=updatesSource;
+vm.createContext(context);
+const prelude=`
+  var __boardFetches=[];
+  var __calls=[];
+  var __elements={};
+  var __focus=[];
+  function __element(){return {value:'',hidden:false,textContent:'',innerHTML:'',open:false,checked:false,indeterminate:false,disabled:false,title:'',className:'',classList:{add(){},remove(){},toggle(){return false;}},style:{},dataset:{},addEventListener(){},removeEventListener(){},dispatchEvent(){},showModal(){this.open=true;},close(){this.open=false;},focus(){},querySelector(){return __element();},querySelectorAll(){return [];},appendChild(){},setAttribute(){},removeAttribute(){}};}
+  document={visibilityState:'visible',body:{appendChild(node){if(node&&String(node.src||'').includes('board-updates.js')){if(!__updatesSource)throw new Error('missing board-updates.js');(0,eval)(__updatesSource);}if(node&&typeof node.onload==='function')node.onload();}},addEventListener(){},dispatchEvent(){},createElement(){return {src:'',onload:null};},getElementById(id){if(!__elements[id])__elements[id]=__element();return __elements[id];},querySelector(){return __element();},querySelectorAll(){return [];}};
+  location={search:'',href:'',replace(){}};
+  CustomEvent=class CustomEvent{constructor(type){this.type=type;}};
+  crypto={randomUUID:()=>'test-id',getRandomValues(bytes){return bytes;}};
+  accountSearchFields=[];
+  clearAccountSearch=()=>{};
+  activeLifecyclePreset='';
+  lifecycleEdit=()=>{};
+  readinessEdit=()=>{};
+  phoneDeviceEdit=()=>{};
+  lifecyclePayload=()=>({});
+  readinessPayload=()=>({});
+  applyAccountPermissions=()=>{};
+  renderVerificationFilter=()=>{};
+  ScopeUI={mount(){},payload(){return {};}};
+  fetch=async(url)=>{
+    const target=String(url);
+    __calls.push(target);
+    if(target.includes('/api/board-updates?cursor=')){
+      const cursor=Number(String(target).split('cursor=')[1]);
+      if(cursor===4)return {status:200,ok:true,json:async()=>({cursor:5,changes:[{entity:'account:43',kind:'change',after:{id:'43',note:'REMOTE-NOTE'},record_version:'remote-v'}]})};
+      if(cursor===5)return {status:200,ok:true,json:async()=>({cursor:6,changes:[{entity:'daily:43:2026-10-26',kind:'change',after:{account_id:'43',day:'2026-10-26',published:1},record_version:'daily-v'}]})};
+      if(cursor===6)return {status:200,ok:true,json:async()=>({reload:true,cursor:9})};
+      return {status:200,ok:true,json:async()=>({cursor,changes:[]})};
+    }
+    if(target.includes('/api/board-updates'))return {status:200,ok:true,json:async()=>({version:'known'})};
+    if(target.includes('/api/board')){__boardFetches.push(target);return {status:200,ok:true,json:async()=>({date:'2026-10-26',today:'2026-10-26',cursor:4,computers:[{id:'1',name:'电脑1'}],statuses:['正常'],accounts:[{id:'43',name:'jia',computer_id:'1',slot:1,status:'正常',note:'OLD-NOTE',published:false,phone_device_name:'OLD-DEVICE'},{id:'39',name:'yi',computer_id:'1',slot:2,status:'正常',note:'KEEP',published:false}],collection:{auto_enabled:false,paused:false,worker_status:'',worker_online:false,pause_reason:'',linked:0,waiting:0,done:0,failed:0},user:{},backup:{},record_versions:{'account:43':'opened','account:39':'other'},phone_cards:{cards:[]},phone_devices:{devices:[]},publishing_layout:{enabled:false,cells:[],batch:''},nurture:{records:[]},offices:[]})};}
+    return {status:404,ok:false,json:async()=>({error:'missing'})};
+  };
+  setInterval=(fn,ms)=>{return 0;};
+  clearInterval=()=>{};
+  setTimeout=(fn)=>{if(typeof fn==='function')fn();return 0;};
+  clearTimeout=()=>{};
+  confirm=()=>false;
+  window.addEventListener=(type,fn)=>{if(type==='focus')__focus.push(fn);};
+  window.removeEventListener=()=>{};
+`;
+const scenario=`
+render=()=>{};
+__ready=(async()=>{
+  await new Promise(resolve=>setImmediate(()=>setImmediate(resolve)));
+  if(!data||data.cursor!==4)throw new Error('board did not keep the sync cursor');
+  if(!__focus.length)throw new Error('missing focus handler');
+  edit('43');
+  __elements.editNote.value='FORM-NOTE';
+  const opened=capturedVersions.get('editor')['account:43'];
+  const boardsBefore=__boardFetches.length;
+  await __focus[0]();
+  if(__boardFetches.length!==boardsBefore)throw new Error('valid cursor requested the full board');
+  if(!__calls.some(item=>item.includes('cursor=4')))throw new Error('focus did not catch up from the cursor');
+  const row=data.accounts.find(account=>account.id==='43');
+  const other=data.accounts.find(account=>account.id==='39');
+  if(!row||row.note!=='REMOTE-NOTE'||row.name!=='jia'||row.phone_device_name!=='OLD-DEVICE')throw new Error('account catch-up did not update only that row');
+  if(!other||other.note!=='KEEP')throw new Error('catch-up changed a different account');
+  if(__elements.editNote.value!=='FORM-NOTE')throw new Error('remote update changed the editor text');
+  if(capturedVersions.get('editor')['account:43']!==opened)throw new Error('remote update changed the editor version');
+  if(data.record_versions['account:43']!=='remote-v')throw new Error('board version was not updated');
+  await __focus[0]();
+  if(row.published!==true||row.note!=='REMOTE-NOTE'||other.note!=='KEEP')throw new Error('daily catch-up did not update only the publish flag');
+  if(__elements.editNote.value!=='FORM-NOTE'||capturedVersions.get('editor')['account:43']!==opened)throw new Error('daily catch-up changed the editor');
+  if(__boardFetches.length!==boardsBefore)throw new Error('daily catch-up requested the full board');
+  await __focus[0]();
+  if(__boardFetches.length!==boardsBefore)throw new Error('reload while editing requested the full board');
+  __elements.editor.open=false;
+  await __focus[0]();
+  if(__boardFetches.length!==boardsBefore+1)throw new Error('expired cursor should reload the full board once');
+})();
+`;
+vm.runInContext(prelude+'\n'+versions+'\n'+appSource+'\n'+scenario,context);
+context.__ready.then(()=>process.exit(0),error=>{console.error(error&&error.stack||error);process.exit(1);});
+'''
+        completed=subprocess.run(['node','-e',harness],cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=20)
+        self.assertEqual(completed.returncode,0,(completed.stderr or completed.stdout).strip())
+
+    def test_reopen_uses_cached_board_then_cursor(self):
+        import subprocess
+        harness=r'''
+const fs=require('fs');
+const path=require('path');
+const vm=require('vm');
+const root=process.cwd();
+const versions=fs.readFileSync(path.join(root,'static','edit-versions.js'),'utf8');
+const appSource=fs.readFileSync(path.join(root,'static','app.js'),'utf8');
+const authSource=fs.readFileSync(path.join(root,'static','auth-ui.js'),'utf8');
+const updatesSource=fs.readFileSync(path.join(root,'static','board-updates.js'),'utf8');
+const memory=new Map();
+const localStorage={getItem(key){return memory.has(key)?memory.get(key):null;},setItem(key,value){memory.set(String(key),String(value));},removeItem(key){memory.delete(key);}};
+function run(userId,note){
+  const context={console,setImmediate,localStorage};
+  context.globalThis=context;
+  context.window=context;
+  context.__updatesSource=updatesSource;
+  context.__userId=userId;
+  context.__note=note;
+  vm.createContext(context);
+  const prelude=`
+    var __boardFetches=[];
+    var __calls=[];
+    var __elements={};
+    var __dom=[];
+    function __element(){return {value:'',hidden:false,textContent:'',innerHTML:'',open:false,checked:false,indeterminate:false,disabled:false,title:'',className:'',classList:{add(){},remove(){},toggle(){return false;}},style:{},dataset:{},addEventListener(){},removeEventListener(){},dispatchEvent(){},showModal(){this.open=true;},close(){this.open=false;},focus(){},querySelector(){return __element();},querySelectorAll(){return [];},appendChild(){},setAttribute(){},removeAttribute(){},reset(){}};}
+    document={visibilityState:'visible',body:{appendChild(node){if(node&&String(node.src||'').includes('board-updates.js')){(0,eval)(__updatesSource);}if(node&&typeof node.onload==='function')node.onload();}},addEventListener(type,fn){if(type==='DOMContentLoaded')__dom.push(fn);},dispatchEvent(){},createElement(){return {src:'',onload:null};},getElementById(id){if(!__elements[id])__elements[id]=__element();return __elements[id];},querySelector(){return __element();},querySelectorAll(){return [];}};
+    location={search:'',href:'',replace(){}};
+    CustomEvent=class CustomEvent{constructor(type){this.type=type;}};
+    crypto={randomUUID:()=>'test-id',getRandomValues(bytes){return bytes;}};
+    accountSearchFields=[];
+    clearAccountSearch=()=>{};
+    activeLifecyclePreset='';
+    renderVerificationFilter=()=>{};
+    fetch=async(url)=>{
+      const target=String(url);
+      __calls.push(target);
+      if(target.includes('/api/auth/me'))return {status:200,ok:true,json:async()=>({user:{id:__userId,name:'user'+__userId}})};
+      if(target.includes('/api/auth/logout'))return {status:200,ok:true,json:async()=>({ok:true})};
+      if(target.includes('/api/board-updates?cursor=')){
+        const cursor=Number(String(target).split('cursor=')[1]);
+        if(cursor===4)return {status:200,ok:true,json:async()=>({cursor:5,changes:[{entity:'account:43',kind:'change',after:{id:'43',note:'REMOTE-NOTE'},record_version:'remote-v'}]})};
+        return {status:200,ok:true,json:async()=>({cursor,changes:[]})};
+      }
+      if(target.includes('/api/board-updates'))return {status:200,ok:true,json:async()=>({version:'known'})};
+      if(target.includes('/api/board')){
+        __boardFetches.push(target);
+        return {status:200,ok:true,json:async()=>({date:'2026-10-26',today:'2026-10-26',cursor:4,computers:[{id:'1',name:'电脑1'}],statuses:['正常'],accounts:[{id:'43',name:'jia',computer_id:'1',slot:1,status:'正常',note:__note,published:false}],collection:{auto_enabled:false,paused:false,worker_status:'',worker_online:false,pause_reason:'',linked:0,waiting:0,done:0,failed:0},user:{id:__userId,name:'user'+__userId},backup:{},record_versions:{'account:43':'v1'},phone_cards:{cards:[]},phone_devices:{devices:[]},publishing_layout:{enabled:false,cells:[]},nurture:{records:[]},offices:[]})};
+      }
+      return {status:404,ok:false,json:async()=>({error:'missing'})};
+    };
+    setInterval=()=>0;
+    clearInterval=()=>{};
+    setTimeout=(fn)=>{if(typeof fn==='function')fn();return 0;};
+    clearTimeout=()=>{};
+    confirm=()=>false;
+    window.addEventListener=()=>{};
+    window.removeEventListener=()=>{};
+  `;
+  const scenario=`
+render=()=>{};
+__ready=(async()=>{
+  await new Promise(resolve=>setImmediate(()=>setImmediate(resolve)));
+  __result={calls:__calls.slice(),boards:__boardFetches.slice(),note:data&&data.accounts&&data.accounts[0]&&data.accounts[0].note,user:data&&data.user&&data.user.id};
+})();
+`;
+  vm.runInContext(prelude+'\n'+versions+'\n'+appSource+'\n'+authSource+'\n'+scenario,context);
+  return context.__ready.then(()=>context.__result);
+}
+(async()=>{
+  const first=await run(7,'CACHED-NOTE');
+  if(first.boards.length!==1||first.note!=='CACHED-NOTE')throw new Error('first open should show the full board');
+  const second=await run(7,'SHOULD-NOT-LOAD');
+  if(second.boards.length!==0)throw new Error('second open requested the full board: '+second.calls.join(' | '));
+  if(!second.calls.some(item=>item.includes('cursor=4')))throw new Error('second open did not catch up from the saved cursor');
+  if(second.note!=='REMOTE-NOTE')throw new Error('second open did not apply only the missed row, got '+second.note);
+  const switched=await run(8,'OTHER-USER');
+  if(switched.boards.length!==1||switched.note!=='OTHER-USER'||switched.user!==8)throw new Error('user switch still showed the previous board');
+  if(String(localStorage.getItem('douyin-board-view')||'').includes('CACHED-NOTE'))throw new Error('previous user remained in the cache');
+  const context={console,setImmediate,localStorage};
+  context.globalThis=context;context.window=context;context.__updatesSource=updatesSource;context.__userId=8;context.__note='AFTER-LOGOUT';
+  vm.createContext(context);
+  const prelude=`
+    var __boardFetches=[];var __calls=[];var __elements={};var __dom=[];
+    function __element(){return {value:'',hidden:false,textContent:'',innerHTML:'',open:false,checked:false,disabled:false,title:'',className:'',classList:{add(){},remove(){},toggle(){return false;}},style:{},dataset:{},onclick:null,addEventListener(){},removeEventListener(){},dispatchEvent(){},showModal(){this.open=true;},close(){this.open=false;},focus(){},querySelector(){return __element();},querySelectorAll(){return [];},appendChild(){},setAttribute(){},removeAttribute(){},reset(){}};}
+    document={visibilityState:'visible',body:{appendChild(node){if(node&&String(node.src||'').includes('board-updates.js')){(0,eval)(__updatesSource);}if(node&&typeof node.onload==='function')node.onload();}},addEventListener(type,fn){if(type==='DOMContentLoaded')__dom.push(fn);},dispatchEvent(){},createElement(){return {src:'',onload:null};},getElementById(id){if(!__elements[id])__elements[id]=__element();return __elements[id];},querySelector(){return __element();},querySelectorAll(){return [];}};
+    location={search:'',href:'',replace(){}};
+    CustomEvent=class CustomEvent{constructor(type){this.type=type;}};
+    crypto={randomUUID:()=>'test-id',getRandomValues(bytes){return bytes;}};
+    accountSearchFields=[];clearAccountSearch=()=>{};activeLifecyclePreset='';renderVerificationFilter=()=>{};
+    fetch=async(url)=>{const target=String(url);__calls.push(target);if(target.includes('/api/auth/logout'))return {status:200,ok:true,json:async()=>({ok:true})};if(target.includes('/api/auth/me'))return {status:200,ok:true,json:async()=>({user:{id:8,name:'user8'}})};if(target.includes('/api/board-updates'))return {status:200,ok:true,json:async()=>({version:'known',cursor:4,changes:[]})};return {status:404,ok:false,json:async()=>({error:'missing'})};};
+    setInterval=()=>0;clearInterval=()=>{};setTimeout=(fn)=>{if(typeof fn==='function')fn();return 0;};clearTimeout=()=>{};confirm=()=>false;window.addEventListener=()=>{};window.removeEventListener=()=>{};
+  `;
+  vm.runInContext(prelude+'\n'+versions+'\n'+appSource+'\n'+authSource+'\nrender=()=>{};__ready=(async()=>{await new Promise(resolve=>setImmediate(()=>setImmediate(resolve)));for(const fn of __dom)fn();await __elements.logout.onclick();})();',context);
+  await context.__ready;
+  if(localStorage.getItem('douyin-board-view')!==null)throw new Error('logout kept the previous board');
+  const again=await run(8,'AFTER-LOGOUT');
+  if(again.boards.length!==1||again.note!=='AFTER-LOGOUT')throw new Error('opening after logout did not load a fresh board');
+})().catch(error=>{console.error(error&&error.stack||error);process.exit(1);});
+'''
+        completed=subprocess.run(['node','-e',harness],cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=20)
+        self.assertEqual(completed.returncode,0,(completed.stderr or completed.stdout).strip())
+
+    def test_date_switch_fetches_flags_only(self):
+        client=test_auth_support.owner_client(app,self.base)
+        with client.open(self.base+'/api/board',timeout=5) as response:
+            board=json.load(response)
+        day=board['today']
+        account=next(row for row in board['accounts'] if row['id']=='43')
+        request=urllib.request.Request(self.base+'/api/daily',data=json.dumps({**{'id':'43','date':day,'published':True}}).encode(),headers={'Content-Type':'application/json'})
+        with client.open(request,timeout=5) as response:
+            self.assertEqual(response.status,200)
+        with client.open(self.base+'/api/daily-flags?date='+day,timeout=5) as response:
+            flags=json.load(response)
+        self.assertEqual(sorted(flags),['date','published'])
+        self.assertEqual(flags['date'],day)
+        self.assertTrue(flags['published']['43'])
+        self.assertFalse(flags['published']['39'])
+        self.assertNotIn(account['name'],json.dumps(flags))
+        bad=urllib.request.Request(self.base+'/api/daily-flags?date=nope')
+        with self.assertRaises(urllib.error.HTTPError) as rejected:
+            client.open(bad,timeout=5)
+        self.assertEqual(rejected.exception.code,400)
+        anonymous=urllib.request.Request(self.base+'/api/daily-flags?date='+day)
+        with self.assertRaises(urllib.error.HTTPError) as missing:
+            urllib.request.urlopen(anonymous,timeout=5)
+        self.assertEqual(missing.exception.code,401)
+        import subprocess
+        harness=r'''
+const fs=require('fs');const path=require('path');const vm=require('vm');
+const appSource=fs.readFileSync(path.join(process.cwd(),'static','app.js'),'utf8');
+const updatesSource=fs.readFileSync(path.join(process.cwd(),'static','board-updates.js'),'utf8');
+const context={console,setImmediate};context.globalThis=context;context.window=context;context.__updatesSource=updatesSource;
+vm.createContext(context);
+const prelude=`
+  var __boardFetches=[];var __calls=[];var __elements={};
+  function __element(){return {value:'',hidden:false,textContent:'',innerHTML:'',open:false,checked:false,indeterminate:false,disabled:false,title:'',className:'',classList:{add(){},remove(){},toggle(){return false;}},style:{},dataset:{},addEventListener(){},removeEventListener(){},dispatchEvent(){},showModal(){this.open=true;},close(){this.open=false;},focus(){},querySelector(){return __element();},querySelectorAll(){return [];},appendChild(){},setAttribute(){},removeAttribute(){}};}
+  document={visibilityState:'visible',body:{appendChild(node){if(node&&String(node.src||'').includes('board-updates.js')){(0,eval)(__updatesSource);}if(node&&typeof node.onload==='function')node.onload();}},addEventListener(){},dispatchEvent(){},createElement(){return {src:'',onload:null};},getElementById(id){if(!__elements[id])__elements[id]=__element();return __elements[id];},querySelector(){return __element();},querySelectorAll(){return [];}};
+  location={search:'',href:'',replace(){}};
+  CustomEvent=class CustomEvent{constructor(type){this.type=type;}};
+  crypto={randomUUID:()=>'test-id',getRandomValues(bytes){return bytes;}};
+  accountSearchFields=[];clearAccountSearch=()=>{};activeLifecyclePreset='';renderVerificationFilter=()=>{};
+  applyVersionDelta=()=>{};versionPayload=(path,body)=>body;activeEditVersions=()=>null;
+  fetch=async(url)=>{
+    const target=String(url);__calls.push(target);
+    if(target.includes('/api/daily-flags'))return {status:200,ok:true,json:async()=>({date:'2026-10-25',published:{'43':true,'39':false}})};
+    if(target.includes('/api/board-updates'))return {status:200,ok:true,json:async()=>({version:'known'})};
+    if(target.includes('/api/board')){__boardFetches.push(target);return {status:200,ok:true,json:async()=>({date:'2026-10-26',today:'2026-10-26',cursor:1,computers:[{id:'1',name:'电脑1'}],statuses:['正常'],accounts:[{id:'43',name:'jia',computer_id:'1',slot:1,status:'正常',note:'KEEP',published:false},{id:'39',name:'yi',computer_id:'1',slot:2,status:'正常',note:'OTHER',published:true}],collection:{auto_enabled:false,paused:false,worker_status:'',worker_online:false,pause_reason:'',linked:0,waiting:0,done:0,failed:0},user:{id:7,name:'user7'},backup:{},record_versions:{},phone_cards:{cards:[]},phone_devices:{devices:[]},publishing_layout:{enabled:false,cells:[]},nurture:{records:[]},offices:[]})};}
+    return {status:404,ok:false,json:async()=>({error:'missing'})};
+  };
+  setInterval=()=>0;clearInterval=()=>{};setTimeout=(fn)=>{if(typeof fn==='function')fn();return 0;};clearTimeout=()=>{};confirm=()=>false;window.addEventListener=()=>{};window.removeEventListener=()=>{};
+`;
+const scenario=`
+render=()=>{};
+__ready=(async()=>{
+  await new Promise(resolve=>setImmediate(()=>setImmediate(resolve)));
+  const boards=__boardFetches.length;
+  __elements.date.value='2026-10-25';
+  await __elements.date.onchange();
+  if(__boardFetches.length!==boards)throw new Error('date switch requested the full board');
+  if(!__calls.some(item=>item.includes('/api/daily-flags?date=2026-10-25')))throw new Error('date switch did not request that day');
+  const row=data.accounts.find(account=>account.id==='43');
+  const other=data.accounts.find(account=>account.id==='39');
+  if(!row||row.published!==true||row.name!=='jia'||row.note!=='KEEP')throw new Error('date switch replaced the account');
+  if(!other||other.published!==false||other.name!=='yi')throw new Error('date switch changed another account body');
+  if(data.accounts.length!==2)throw new Error('date switch changed the account list');
+})();
+`;
+vm.runInContext(prelude+'\n'+appSource+'\n'+scenario,context);
+context.__ready.then(()=>process.exit(0),error=>{console.error(error&&error.stack||error);process.exit(1);});
 '''
         completed=subprocess.run(['node','-e',harness],cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=20)
         self.assertEqual(completed.returncode,0,(completed.stderr or completed.stdout).strip())
@@ -696,6 +1122,132 @@ function run(enabled){
 '''
         completed=subprocess.run(['node','-e',harness],cwd=os.path.dirname(os.path.abspath(__file__)),capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=20)
         self.assertEqual(completed.returncode,0,(completed.stderr or completed.stdout).strip())
+
+
+    def test_two_saves_remain_readable_after_restart(self):
+        client=test_auth_support.owner_client(app,self.base)
+        with app.connect() as db:
+            start=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+        def save(ident,note):
+            with client.open(self.base+'/api/board',timeout=5) as response:
+                board=json.load(response)
+            account=next(row for row in board['accounts'] if row['id']==ident)
+            request=urllib.request.Request(self.base+'/api/account',data=json.dumps({**account,'note':note}).encode(),headers={'Content-Type':'application/json'})
+            with client.open(request,timeout=5) as response:
+                self.assertEqual(response.status,200)
+        save('43','甲的备注')
+        save('39','乙的备注')
+        with app.connect() as db:
+            before_reject=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+        stale=urllib.request.Request(self.base+'/api/account',data=json.dumps({'id':'43','note':'不会写上','_expected_versions':{'account:43':'stale-token'}}).encode(),headers={'Content-Type':'application/json'})
+        with self.assertRaises(urllib.error.HTTPError) as rejected:
+            client.open(stale,timeout=5)
+        self.assertEqual(rejected.exception.code,409)
+        board_updates._pending=None
+        board_updates._version=None
+        owner={'role':'owner','office_ids':[]}
+        staff={'role':'employee','office_ids':['office-a']}
+        with app.connect() as db:
+            self.assertEqual(db.execute("SELECT note FROM accounts WHERE id='43'").fetchone()[0],'甲的备注')
+            self.assertEqual(db.execute("SELECT note FROM accounts WHERE id='39'").fetchone()[0],'乙的备注')
+            self.assertEqual(db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0],before_reject)
+            found=board_updates.since(db,start,owner)
+            hidden=board_updates.since(db,start,staff)
+        accounts=[item['entity'] for item in found['changes'] if item['entity'].startswith('account:')]
+        self.assertEqual(accounts,['account:43','account:39'])
+        self.assertEqual(hidden['changes'],[])
+        first,second=found['changes'][0],found['changes'][1]
+        self.assertLess(first['cursor'],second['cursor'])
+        self.assertEqual(first['kind'],'change')
+        self.assertEqual(first['after']['note'],'甲的备注')
+        self.assertEqual(second['after']['note'],'乙的备注')
+        self.assertEqual(first['record_version'],operations.token(first['after']))
+        self.assertEqual(first['offices'],[])
+        with app.connect() as db:
+            tail=board_updates.since(db,first['cursor'],owner)
+        self.assertEqual([item['entity'] for item in tail['changes']],['account:39'])
+        self.assertTrue(board_updates.change_visible({'role':'employee','office_ids':['office-a']},['office-a']))
+        self.assertFalse(board_updates.change_visible({'role':'employee','office_ids':['office-a']},['office-b']))
+        self.assertFalse(board_updates.change_visible({'role':'employee','office_ids':['office-a']},[]))
+        self.assertTrue(board_updates.change_visible({'role':'owner','office_ids':[]},[]))
+
+    def test_following_cursor_is_a_delta_and_a_missing_cursor_reloads(self):
+        client=test_auth_support.owner_client(app,self.base)
+        def current_cursor():
+            with app.connect() as db:
+                return db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+        def save(ident,note):
+            with client.open(self.base+'/api/board',timeout=5) as response:
+                account=next(row for row in json.load(response)['accounts'] if row['id']==ident)
+            request=urllib.request.Request(self.base+'/api/account',data=json.dumps({**account,'note':note}).encode(),headers={'Content-Type':'application/json'})
+            with client.open(request,timeout=5) as response:
+                self.assertEqual(response.status,200)
+        def fetch(cursor):
+            with client.open(self.base+'/api/board-updates?cursor='+str(cursor),timeout=5) as response:
+                self.assertEqual(response.status,200)
+                return json.load(response)
+        save('43','先改甲')
+        middle=current_cursor()
+        save('39','再改乙')
+        delta=fetch(middle)
+        self.assertFalse(delta.get('reload'))
+        self.assertEqual([item['entity'] for item in delta['changes']],['account:39'])
+        self.assertNotIn('account:43',json.dumps(delta))
+        with app.connect() as db:
+            db.execute('DELETE FROM operations_history WHERE id=?',(middle,))
+        missing=fetch(middle)
+        self.assertTrue(missing.get('reload'))
+        self.assertNotIn('changes',missing)
+        kept=current_cursor()
+        with app.connect() as db:
+            board_updates.notify_reload(db)
+        forced=fetch(kept)
+        self.assertTrue(forced.get('reload'))
+        self.assertNotIn('changes',forced)
+        request=urllib.request.Request(self.base+'/api/board-updates?cursor=nope')
+        with self.assertRaises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(request,timeout=5)
+        self.assertEqual(error.exception.code,401)
+        bad=urllib.request.Request(self.base+'/api/board-updates?cursor=nope')
+        with self.assertRaises(urllib.error.HTTPError) as rejected:
+            client.open(bad,timeout=5)
+        self.assertEqual(rejected.exception.code,400)
+
+    def test_each_save_kind_is_visible_to_later_catch_up(self):
+        client=test_auth_support.owner_client(app,self.base)
+        def current_cursor():
+            with app.connect() as db:
+                return db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+        def post(path,body):
+            request=urllib.request.Request(self.base+path,data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})
+            try:
+                with client.open(request,timeout=5) as response:
+                    self.assertEqual(response.status,200,path)
+                    return json.load(response)
+            except urllib.error.HTTPError as error:
+                self.fail(path+' '+error.read().decode())
+        start=current_cursor()
+        with client.open(self.base+'/api/board',timeout=5) as response:
+            day=json.load(response)['today']
+        with app.connect() as db:
+            db.execute("INSERT INTO publishing_layout_state(id,batch) VALUES(1,'synthetic-batch')")
+            db.execute("INSERT INTO publishing_layout(batch,computer_id,slot,account_id,label,office,source_cell,source_url,reason) VALUES('synthetic-batch','1',1,NULL,'合成格子','合成办公室','A1','','待匹配')")
+        post('/api/daily',dict(id='43',date=day,published=True))
+        post('/api/bulk-status',dict(ids=['50'],status='待确认'))
+        post('/api/phone-card',dict(phone='13800001111'))
+        post('/api/phone-device/create',dict(id='8',state='在用'))
+        post('/api/workspace/nurture/join',dict(id='43'))
+        post('/api/publishing/link',dict(batch='synthetic-batch',computer_id='1',slot=1,account_id='43',expected_account_id=None))
+        with client.open(self.base+'/api/board-updates?cursor='+str(start),timeout=5) as response:
+            payload=json.load(response)
+        self.assertFalse(payload.get('reload'))
+        entities=[item['entity'] for item in payload['changes']]
+        self.assertTrue(any(entity.startswith('daily:43:') for entity in entities),entities)
+        self.assertIn('account:50',entities)
+        self.assertTrue(any(entity.startswith('card:') for entity in entities),entities)
+        self.assertIn('device:8',entities)
+        self.assertIn('nurture:43',entities)
+        self.assertTrue(any(entity.startswith('layout:synthetic-batch:1:1') for entity in entities),entities)
 
 
 if __name__=='__main__':
