@@ -10,7 +10,12 @@ from pathlib import Path
 import phone_devices
 
 ROOT=Path(__file__).resolve().parent
-SOURCE=Path('E:/Downloads/TencentDocsSecondAccountImport')
+
+def import_dir():
+    import os
+    value=os.environ.get('DOUYIN_BOARD_IMPORT_DIR','').strip()
+    if not value:raise ValueError('请设置 DOUYIN_BOARD_IMPORT_DIR 为导入目录')
+    return Path(value)
 MARKER='tencent-DRWxWc1huUWFsVkZp-BB08J2-office-three-v1'
 PREFIX='office3:'
 
@@ -65,7 +70,8 @@ def prepare(folder):
     return records,computers
 
 
-def apply(db,folder=SOURCE):
+def apply(db,folder=None):
+    if folder is None:folder=import_dir()
     records,computers=prepare(folder)
     phone_devices.migrate(db)
     if db.execute('SELECT 1 FROM imports WHERE name=?',(MARKER,)).fetchone():
@@ -131,5 +137,5 @@ def run(db_path,write=False):
 if __name__=='__main__':
     parser=argparse.ArgumentParser();parser.add_argument('--db',default=str(ROOT/'data/board.db'));parser.add_argument('--apply',action='store_true')
     args=parser.parse_args();report=run(args.db,args.apply)
-    (SOURCE/('import-report.json' if args.apply else 'validation-report.json')).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+    (import_dir()/('import-report.json' if args.apply else 'validation-report.json')).write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(report,ensure_ascii=False))

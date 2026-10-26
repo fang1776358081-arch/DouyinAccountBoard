@@ -8,7 +8,11 @@ import audit_publishing_matrix as audit
 import import_publishing_layout
 import nurture
 
-FOLDER=Path('E:/Downloads/DouyinReimport-20261019')
+def import_dir():
+    import os
+    value=os.environ.get('DOUYIN_BOARD_IMPORT_DIR','').strip()
+    if not value:raise ValueError('请设置 DOUYIN_BOARD_IMPORT_DIR 为导入目录')
+    return Path(value)
 def text(value):return re.sub(r'\s+','',value or '')
 def parsed_date(value):
     value=value.strip()
@@ -19,7 +23,8 @@ def parsed_date(value):
     if result>date.today().isoformat():raise ValueError('注册日期晚于今天')
     return result
 
-def apply(db,folder=FOLDER):
+def apply(db,folder=None):
+    if folder is None:folder=import_dir()
     report=dict(updated=0,added=0,skipped=[],warnings=[],cards_added=0,manual_kept=0)
     touched=set()
     for group in ['main','three']:
@@ -105,7 +110,7 @@ def apply(db,folder=FOLDER):
             if not db.execute('SELECT 1 FROM accounts WHERE parent_account_id=?',(parents[0]['id'],)).fetchone():
                 db.execute('UPDATE accounts SET parent_account_id=? WHERE id=?',(parents[0]['id'],children[0]['id']))
     db.execute("UPDATE accounts SET auxiliary_state='已注册' WHERE id IN (SELECT parent_account_id FROM accounts WHERE parent_account_id IS NOT NULL)")
-    audit.FOLDER=folder;audit.analyze()
+    audit.analyze(folder)
     old_manual=[dict(r) for r in db.execute('SELECT p.*,l.actor_id,l.updated_at,l.previous_reason FROM publishing_layout p JOIN publishing_layout_links l USING(batch,computer_id,slot) WHERE batch=(SELECT batch FROM publishing_layout_state WHERE id=1)')]
     layout=import_publishing_layout.apply(db,folder)
     duplicates=db.execute('SELECT account_id FROM publishing_layout WHERE batch=? AND account_id IS NOT NULL GROUP BY account_id HAVING count(*)>1',(layout['batch'],)).fetchall()

@@ -15,7 +15,7 @@ description: Ships Douyin Account Board changes on the two release paths. Use wh
 
 员工的桌面壳打开的是 http://42.192.45.194 ，所以网站更新后，他们刷新或重新打开页面就能看到。已经安装的桌面壳程序不会因为这次推送而更换。
 
-1. 确认没有把 `data/board.db`、`logs/`、`desktop/`、`.env`、密码、令牌、连接串放进提交。LICENSE 保持不入库。
+1. 确认没有把 `data/board.db`、`logs/`、`desktop/`、`.env`、密码、令牌、连接串放进提交。
 2. 提交并推送到 `fang1776358081-arch/DouyinAccountBoard` 的 `main`。不要改 git config，不要打印令牌，不要强推。本机默认凭据可能是另一个 GitHub 账号；用 `gh auth token --user fang1776358081-arch` 做一次性 askpass，并执行 `git -c credential.helper= push https://fang1776358081-arch@github.com/fang1776358081-arch/DouyinAccountBoard.git HEAD:main`。
 3. 用 `git ls-remote` 核对远端 `main` 已是这次提交。
 4. 服务器上的定时任务约每 2 分钟执行 `/usr/local/sbin/douyin-board-sync`：拉取远端；本地有未提交改动，或已经等于 `origin/main`，就跳过；否则快进合并并重启 `douyin-board.service`。服务器访问 GitHub 失败时会跳过，旧版本继续运行。

@@ -9,11 +9,15 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-SOURCE = Path('E:/Downloads/TencentDocsAccountImport')
+def import_dir():
+    import os
+    value=os.environ.get('DOUYIN_BOARD_IMPORT_DIR','').strip()
+    if not value:raise ValueError('请设置 DOUYIN_BOARD_IMPORT_DIR 为导入目录')
+    return Path(value)
 
 
 def rows(name):
-    data = json.loads((SOURCE / (name + '.json')).read_text(encoding='utf-8'))
+    data = json.loads((import_dir() / (name + '.json')).read_text(encoding='utf-8'))
     if data.get('error'):
         raise ValueError(data['error'])
     return list(csv.reader(io.StringIO(data['csv_data'])))
@@ -167,5 +171,5 @@ if __name__ == '__main__':
     import sys
     target = Path(sys.argv[1]) if len(sys.argv)>1 else ROOT / 'data/board.db'
     report = import_snapshot(target, backup=len(sys.argv)==1)
-    (SOURCE / 'import-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
+    (import_dir() / 'import-report.json').write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     print(json.dumps(report,ensure_ascii=False))

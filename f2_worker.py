@@ -10,10 +10,11 @@ from urllib.error import HTTPError
 from release_policy import require_collection
 
 ROOT=Path(__file__).resolve().parent
-RUNTIME=Path('E:/douyin-f2-counts/.venv/Scripts/python.exe')
-SCRIPT=Path('E:/douyin-f2-counts/douyin-f2-counts/scripts/douyin_counts.py')
-PROFILE=Path('E:/douyin-f2-counts/private-profile')
-OUTPUT=Path('E:/Downloads/DouyinBoardCollections')
+
+def collection_tool(name):
+    value=os.environ.get(name,'').strip()
+    if not value:raise ValueError('采集环境未配置')
+    return Path(value)
 ERRORS={'SearchNeedsVerification':'抖音搜索需要安全验证，请在服务器采集浏览器中手动完成',
         'LoginRequired':'抖音登录已失效，请在服务器采集浏览器重新登录',
         'SearchUnavailable':'没有搜索到抖音号完全一致的账号，请核对真实抖音号',
@@ -59,12 +60,12 @@ class Worker:
         if command:self.command=command
 
     def launch(self,args,stdin=None):
-        return subprocess.Popen([str(RUNTIME),'-X','utf8',str(SCRIPT),*args,'--profile',str(PROFILE)],
+        return subprocess.Popen([str(collection_tool('DOUYIN_BOARD_F2_PYTHON')),'-X','utf8',str(collection_tool('DOUYIN_BOARD_F2_SCRIPT')),*args,'--profile',str(collection_tool('DOUYIN_BOARD_F2_PROFILE'))],
             stdin=stdin,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
 
     def collect(self,job):
-        folder=OUTPUT/job['token'];folder.mkdir(parents=True,exist_ok=True)
+        folder=collection_tool('DOUYIN_BOARD_F2_OUTPUT')/job['token'];folder.mkdir(parents=True,exist_ok=True)
         source=folder/'accounts.json'
         # Always search by handle when supplied; a cached homepage is not identity proof.
         source.write_text(json.dumps([job['douyin_id'] or job['homepage']]),encoding='utf-8')

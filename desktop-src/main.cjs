@@ -3,7 +3,6 @@ const {randomBytes}=require('node:crypto');
 const {spawn}=require('node:child_process');
 const path=require('node:path');
 const fs=require('node:fs');
-const root=path.resolve(process.resourcesPath,'..','..');
 app.setName('抖音账号工作台');
 app.setAppUserModelId('local.douyin.account.board');
 const updates=require('./updater.cjs');
@@ -15,14 +14,6 @@ app.on('second-instance',()=>{if(window){if(window.isMinimized())window.restore(
 function stop(){if(collectorChild&&!collectorChild.killed){spawn('taskkill',['/PID',String(collectorChild.pid),'/T','/F'],{windowsHide:true,stdio:'ignore'});collectorChild=undefined;}if(child&&!child.killed){child.kill();child=undefined;}}
 app.on('before-quit',()=>{quitting=true;stop();});
 app.on('window-all-closed',()=>app.quit());
-function startF2Worker(shared){
-  return; // First release keeps collection disabled, including desktop launch paths.
-  const runtime='E:/douyin-f2-counts/.venv/Scripts/python.exe',script=path.join(root,'f2_worker.py');
-  if(!fs.existsSync(runtime)||!fs.existsSync(script))return;
-  const workerProcess=spawn(runtime,['-X','utf8',script],{cwd:root,windowsHide:true,detached:shared,stdio:'ignore',env:{...process.env,DOUYIN_BOARD_WORKER_ORIGIN:serverOrigin,DOUYIN_BOARD_WORKER_TOKEN:workerToken}});
-  workerProcess.on('error',()=>{});
-  if(shared)workerProcess.unref();else collectorChild=workerProcess;
-}
 async function start(){
   const profile=app.getPath('userData');
   fs.mkdirSync(path.join(profile,'logs'),{recursive:true});

@@ -4,7 +4,11 @@ import re
 from collections import Counter,defaultdict
 from pathlib import Path
 
-FOLDER=Path('E:/Downloads/DouyinDeviceAudit-20261017')
+def import_dir():
+    import os
+    value=os.environ.get('DOUYIN_BOARD_IMPORT_DIR','').strip()
+    if not value:raise ValueError('请设置 DOUYIN_BOARD_IMPORT_DIR 为导入目录')
+    return Path(value)
 SOURCES={
  'main':dict(name='办公室一、二原文档',file='DRVFPb29NZ2JieVJS',matrix='tnqw1u',accounts='3qxa7x',computer_col=12),
  'three':dict(name='办公室三新文档',file='DRWxWc1huUWFsVkZp',matrix='nh0fs2',accounts='BB08J2',computer_col=11),
@@ -39,11 +43,12 @@ def split_label(value):
     return phone_number(prefix),normalized(re.split(r'[（(]',name)[0])
 
 
-def analyze():
+def analyze(folder=None):
+    if folder is None:folder=import_dir()
     errors=[];pending=[];positions=[];unassigned=[];summaries=[];matrices=[]
     for group,source in SOURCES.items():
-        raw=json.loads((FOLDER/(group+'-accounts.json')).read_text(encoding='utf-8'))
-        matrix=json.loads((FOLDER/(group+'-matrix.json')).read_text(encoding='utf-8'))
+        raw=json.loads((folder/(group+'-accounts.json')).read_text(encoding='utf-8'))
+        matrix=json.loads((folder/(group+'-matrix.json')).read_text(encoding='utf-8'))
         ac=[];by_name=defaultdict(list);by_phone=defaultdict(list)
         for row_number,row in enumerate(raw[1:],2):
             row=row+['']*22
@@ -112,7 +117,7 @@ def analyze():
         summaries.append(dict(source=source['name'],accounts=len(ac),active=len(valid_cells),matched=sum(c['certain'] for c in valid_cells),errors=group_errors,missing=group_missing,review=sum(c['result'] in ['待核对','重复发布安排','发布停发冲突'] for c in valid_cells),unassigned=sum(r['source']==source['name'] for r in unassigned),ignored_rows=ignored))
         matrices.append(dict(group=group,source=source,headers=['电脑 / 主机']+[matrix[0][i] for i in active_cols],rows=matrix_rows))
     output=dict(summary=summaries,errors=errors,pending=pending,positions=positions,unassigned=unassigned,matrices=matrices)
-    (FOLDER/'audit.json').write_text(json.dumps(output,ensure_ascii=False,indent=2),encoding='utf-8')
+    (folder/'audit.json').write_text(json.dumps(output,ensure_ascii=False,indent=2),encoding='utf-8')
     return output
 
 

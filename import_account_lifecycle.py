@@ -17,7 +17,10 @@ def populate(db):
     marker = 'tencent-lifecycle-20261014'
     if db.execute('SELECT 1 FROM imports WHERE name=?',(marker,)).fetchone():
         return {'already_imported': True}
-    source = json.loads(Path('E:/Downloads/TencentDocsAccountImport/latest-accounts.json').read_text(encoding='utf-8'))
+    import os
+    folder=os.environ.get('DOUYIN_BOARD_IMPORT_DIR','').strip()
+    if not folder:raise ValueError('请设置 DOUYIN_BOARD_IMPORT_DIR 为导入目录')
+    source = json.loads((Path(folder)/'latest-accounts.json').read_text(encoding='utf-8'))
     rows = list(csv.reader(io.StringIO(source['csv_data'])))
     by_row = {}
     for a in db.execute('SELECT id,note FROM accounts'):
