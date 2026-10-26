@@ -1,13 +1,19 @@
 import argparse
+import base64
+import io
 import json
-import sqlite3
 import os
+import sqlite3
 import threading
+import zipfile
+from xml.sax.saxutils import escape
 from contextlib import contextmanager
 from datetime import datetime, date, timezone, timedelta
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+import board_updates
+import heavy_work
 import collection
 import account_lifecycle
 import backup
@@ -26,7 +32,47 @@ from sql_dialect import begin_write, begin_read, integer_order, integrity_errors
 
 ROOT = Path(__file__).resolve().parent
 DB = Path(os.environ['DOUYIN_BOARD_DATA_DIR']) / 'board.db' if os.environ.get('DOUYIN_BOARD_DATA_DIR') else None
+
+def interface_directory():
+    """The website and desktop shell share one static folder when the package sits inside the project."""
+    bundled = ROOT / 'static'
+    if ROOT.name == 'backend' and ROOT.parent.name == 'resources' and ROOT.parent.parent.name == 'desktop':
+        shared = ROOT.parents[2] / 'static'
+        if (shared / 'workspace.html').is_file():
+            return shared
+    return bundled
 STATES = ['正常', '养号7天', '短期封禁', '封禁', '发不了', '停用', '待确认']
+
+
+def _xlsx_column(index):
+    letters='';number=index+1
+    while number:
+        number,remainder=divmod(number-1,26)
+        letters=chr(65+remainder)+letters
+    return letters
+
+
+def _xlsx_package(rows):
+    sheet_rows=[]
+    for row_number,row in enumerate(rows,start=1):
+        cells=[]
+        for column,value in enumerate(row):
+            text=str(value)
+            if text.startswith(('=','+','-','@')):text="'"+text
+            cells.append('<c r="%s%d" t="inlineStr"><is><t>%s</t></is></c>'%(_xlsx_column(column),row_number,escape(text)))
+        sheet_rows.append('<row r="%d">%s</row>'%(row_number,''.join(cells)))
+    sheet='<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>%s</sheetData></worksheet>'%''.join(sheet_rows)
+    parts={
+        '[Content_Types].xml':'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>',
+        '_rels/.rels':'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>',
+        'xl/workbook.xml':'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="工作台资料" sheetId="1" r:id="rId1"/></sheets></workbook>',
+        'xl/_rels/workbook.xml.rels':'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+        'xl/worksheets/sheet1.xml':sheet,
+    }
+    buffer=io.BytesIO()
+    with zipfile.ZipFile(buffer,'w',compression=zipfile.ZIP_DEFLATED) as archive:
+        for name,payload in parts.items():archive.writestr(name,payload)
+    return buffer.getvalue()
 WORKER_TOKEN = os.environ.get('DOUYIN_BOARD_WORKER_TOKEN', '')
 _DATABASE_PROVIDER = None
 
@@ -123,7 +169,12 @@ class Handler(SimpleHTTPRequestHandler):
     timeout = REQUEST_IO_TIMEOUT
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(ROOT / 'static'), **kwargs)
+        super().__init__(*args, directory=str(interface_directory()), **kwargs)
+
+    def end_headers(self):
+        if not urlparse(self.path).path.startswith('/api/'):
+            self.send_header('Cache-Control', 'no-store')
+        super().end_headers()
 
     def handle(self):
         acquired = _REQUEST_SLOTS.acquire(blocking=False)
@@ -279,6 +330,14 @@ class Handler(SimpleHTTPRequestHandler):
                 db.execute('BEGIN IMMEDIATE')
                 job=collection.next_job(db,today())
             return self.reply({'job':job})
+        if parsed.path == '/api/board-updates':
+            known=parse_qs(parsed.query).get('version',[''])[0]
+            with connect() as db:
+                actor=auth.session(db,self.headers.get('Cookie'))
+                if not actor:return self.reply({'error':'请先登录工作台'},401)
+                board_updates.publish(operations.token(operations.versions(db)))
+            if known==board_updates.current():return self.reply(board_updates.wait(known, actor))
+            return self.reply({'version':board_updates.current()})
         if parsed.path != '/api/board':
             if parsed.path.startswith('/api/'):return self.reply({'error':'接口不存在'},404)
             return super().do_GET()
@@ -457,6 +516,14 @@ class Handler(SimpleHTTPRequestHandler):
             return self.reply({'error': str(error)}, 400)
 
     def post_response(self):
+        heavy=self.path in ('/api/workspace/import-apply','/api/workspace/nurture/upload')
+        if heavy:heavy_work.acquire()
+        try:
+            return self._post_response()
+        finally:
+            if heavy:heavy_work.release()
+
+    def _post_response(self):
         if urlparse(self.path).path.startswith('/api/collection/'):
             return self.reply({'error': COLLECTION_MESSAGE, 'code': 'COLLECTION_DISABLED'}, 503)
         # Same-origin writes only; local services must not accept cross-site form submissions.
@@ -594,7 +661,14 @@ class Handler(SimpleHTTPRequestHandler):
                     except workspace_service.ExportTimeout:
                         return self._export_failure(db,body,'EXPORT_TIMEOUT','导出超时，请稍后重试或改用 CSV')
                     except workspace_service.ExportFileError:
-                        return self._export_failure(db,body,'FILE_FAILED','导出文件未能保存，请稍后重试或改用 CSV')
+                        if body.get('format')!='xlsx':
+                            return self._export_failure(db,body,'FILE_FAILED','导出文件未能保存，请稍后重试或改用 CSV')
+                        import data_exchange
+                        ids=body.get('ids')
+                        export_day=str(body.get('date',today()))
+                        rows=data_exchange.table_rows(db,body.get('kind'),set(map(str,ids)) if ids is not None else None,body.get('template') is True,export_day,actor=actor)
+                        content=_xlsx_package(rows)
+                        result=dict(filename=('导入模板' if body.get('template') else '工作台资料')+'.xlsx',content=base64.b64encode(content).decode(),mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',count=len(rows)-1)
                     auth.audit(db,actor,'导出业务资料',str(body.get('kind')))
                     db.commit()
                     return self.reply(result)
@@ -698,6 +772,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if self.path.startswith('/api/workspace/') or self.path in ['/api/publishing/assignment','/api/account/nurture']:
                     result=workspace_service.post(db,actor,self.path,body,DB,today())
                     operations.finish(self,db,actor,self.path,change_state)
+                    if self.path in ('/api/workspace/restore-apply','/api/workspace/import-apply'):board_updates.notify_reload(db)
                     auth.audit(db,actor,self.path,str(body.get('id',body.get('backup_id',''))))
                     db.commit()
                     return self.reply(result)
@@ -779,8 +854,10 @@ class Handler(SimpleHTTPRequestHandler):
                     if not db.execute('SELECT 1 FROM accounts WHERE id=?',(str(body['id']),)).fetchone():
                         raise ValueError('账号不存在')
                     db.execute('INSERT INTO daily VALUES(?,?,?) ON CONFLICT(account_id,day) DO UPDATE SET published=excluded.published',(str(body['id']),day,int(body['published'])))
+                    saved_daily={'id':str(body['id']),'date':day,'published':body['published']}
                 elif self.path in ['/api/account', '/api/account/create']:
-                    account_service.save(db,body,actor,today(),create=self.path.endswith('/create'))
+                    previous_offices=sorted(office_scope.entity_offices(db,'accounts',str(body['id']))) if self.path=='/api/account' and getattr(db,'scope_enabled',False) else None
+                    saved_account=account_service.save(db,body,actor,today(),create=self.path.endswith('/create'))
                 elif self.path == '/api/bulk-status':
                     if body['status'] not in STATES or not isinstance(body['ids'],list) or not body['ids']:
                         raise ValueError('请选择账号及状态')
@@ -788,8 +865,14 @@ class Handler(SimpleHTTPRequestHandler):
                 else:
                     return self.reply({'error':'接口不存在'},404)
                 operations.finish(self,db,actor,self.path,change_state)
+                if self.path=='/api/account':
+                    next_offices=sorted(office_scope.entity_offices(db,'accounts',saved_account)) if getattr(db,'scope_enabled',False) else None
+                    board_updates.notify_office_move(db,saved_account,previous_offices=previous_offices,next_offices=next_offices)
+                result={'ok':True}
+                if self.path=='/api/account':result['account']=account_service.board_account(db,saved_account,today())
+                elif self.path=='/api/daily':result['daily']=saved_daily
                 auth.audit(db,actor,self.path,body.get('id',','.join(map(str,body.get('ids',[])))[:200]))
-            self.reply({'ok':True})
+            self.reply(result)
         except AdmissionRejected as e:
             status=409 if e.code in ('WRITER_VERSION_RETIRED','RESTORE_GENERATION_EXPIRED') else 503
             self.reply({'error':'当前运行状态不允许写入，请刷新后重试','code':e.code},status)

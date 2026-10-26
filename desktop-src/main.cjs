@@ -36,28 +36,10 @@ async function start(){
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));
   window.webContents.on('will-navigate',(event,url)=>{if(!serverOrigin||!url.startsWith(serverOrigin+'/'))event.preventDefault();});
   window.webContents.session.setPermissionRequestHandler((_wc,_permission,callback)=>callback(false));
-  const sharedConfigPath=path.join(root,'data','web-service.json');
-  if(fs.existsSync(sharedConfigPath)){
-    const shared=JSON.parse(fs.readFileSync(sharedConfigPath,'utf8'));
-    if(shared.enabled){
-      workerToken=shared.worker_token;serverOrigin='http://127.0.0.1:'+shared.port;
-      const response=await fetch(serverOrigin+'/api/health',{signal:AbortSignal.timeout(5000)});
-      const health=await response.json();
-      if(!response.ok||health.service!=='douyin-account-board'||health.shared!==true)throw Error('共享网站服务未运行，请在网站管理中启动 DouyinAccountBoardWeb 任务');
-      // The F2 worker holds a host-wide lock, preventing duplicate consumers.
-      startF2Worker(true);
-      await window.loadURL(serverOrigin+'/login.html');window.show();window.focus();
-      return;
-    }
-  }
-  child=spawn(path.join(process.resourcesPath,'python','python.exe'),['-u',path.join(process.resourcesPath,'backend','desktop_server.py')],{cwd:root,windowsHide:true,env:{...process.env,DOUYIN_BOARD_DATA_DIR:path.join(root,'data'),DOUYIN_BOARD_WORKER_TOKEN:workerToken,PYTHONIOENCODING:'utf-8'}});
-  child.stderr.pipe(log,{end:false});
-  let buffer='',ready=false;
-  const timeout=setTimeout(()=>fail('启动超时，请查看 logs/desktop.log'),20000);
-  const fail=message=>{clearTimeout(timeout);if(quitting)return;dialog.showErrorBox('账号工作台启动失败',message);app.quit();};
-  child.on('error',e=>fail(e.message));
-  child.on('exit',code=>{clearTimeout(timeout);if(!quitting)fail('本地数据服务意外退出（'+code+'）');});
-  child.stdout.on('data',chunk=>{buffer+=chunk.toString();const match=buffer.match(/BOARD_URL=(http:\/\/127\.0\.0\.1:\d+)/);if(match&&!ready){ready=true;clearTimeout(timeout);serverOrigin=match[1];startF2Worker(false);(async()=>{const response=await fetch(serverOrigin+'/api/auth/desktop-setup',{method:'POST',headers:{'Content-Type':'application/json','X-Worker-Token':workerToken},body:'{}'});if(!response.ok)throw Error('初始化登录服务失败');const grant=await response.json();if(grant.setup_token)await window.webContents.session.cookies.set({url:serverOrigin,name:'board_setup',value:grant.setup_token,path:'/',httpOnly:true,sameSite:'strict',expirationDate:Date.now()/1000+1800});await window.loadURL(serverOrigin+'/login.html');window.show();window.focus();})().catch(e=>fail(e.message));}});
+  serverOrigin='http://42.192.45.194';
+  await window.loadURL(serverOrigin+'/login.html');
+  window.show();
+  window.focus();
 }
 app.whenReady().then(start).catch(e=>{dialog.showErrorBox('启动失败',e.message);app.quit();});
 }

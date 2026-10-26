@@ -12,7 +12,8 @@ async function refreshCollectionPanel(){
     document.getElementById('workCollectionPause').disabled=c.enabled===false||!result.can_manage;
     document.getElementById('workCollectionResume').disabled=c.enabled===false||!result.can_manage;
     document.getElementById('workCollectionResume').hidden=!c.paused&&c.worker_status!=='等待手动登录或验证';
-  }catch(error){document.getElementById('workCollectionInfo').textContent=error.message;}
+    return c.enabled!==false;
+  }catch(error){document.getElementById('workCollectionInfo').textContent=error.message;return true;}
 }
 async function controlCollectionPanel(body){
   const errorBox=document.getElementById('workCollectionError');errorBox.textContent='';
@@ -22,5 +23,4 @@ async function controlCollectionPanel(body){
 document.getElementById('workCollectionPause').onclick=()=>controlCollectionPanel({pause:true});
 document.getElementById('workCollectionResume').onclick=()=>controlCollectionPanel({resume:true});
 document.getElementById('workCollectionRefresh').onclick=refreshCollectionPanel;
-refreshCollectionPanel();
-setInterval(()=>{if(document.visibilityState==='visible')refreshCollectionPanel();},5000);
+refreshCollectionPanel().then(active=>{if(active)setInterval(()=>{if(document.visibilityState==='visible')refreshCollectionPanel();},5000);});

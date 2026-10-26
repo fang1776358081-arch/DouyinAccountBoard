@@ -10,6 +10,7 @@ import auth
 import backup
 import backup_management
 import data_exchange
+import heavy_work
 import operations
 import nurture
 
@@ -58,28 +59,32 @@ def post(db,actor,path,body,db_path,day):
         payload=operations.take_preview(db,actor,body.get('preview_id'),'restore');result=backup_management.restore(db,db_path,payload)
         db.execute('DELETE FROM operations_previews');return result
     if path.endswith('/export'):
-        ids=body.get('ids')
-        if ids is not None and (not isinstance(ids,list) or len(ids)>5000):raise ValueError('导出筛选范围不正确')
-        export_day=str(body.get('date',day));date.fromisoformat(export_day)
-        rows=data_exchange.table_rows(db,body.get('kind'),set(map(str,ids)) if ids is not None else None,body.get('template') is True,export_day,actor=actor)
-        fmt=body.get('format','xlsx')
-        if fmt=='csv':
-            stream=io.StringIO();writer=csv.writer(stream);writer.writerows([["'"+str(value) if str(value).startswith(('=','+','-','@')) else value for value in row] for row in rows]);content=stream.getvalue().encode('utf-8-sig');mime='text/csv;charset=utf-8'
-        elif fmt=='xlsx':
-            try:
-                root=Path(db_path).resolve().parent.parent;folder=root/'artifacts/exports';folder.mkdir(parents=True,exist_ok=True)
-                with tempfile.TemporaryDirectory(dir=folder) as temporary:
-                    source=Path(temporary)/'input.json';target=Path(temporary)/'export.xlsx'
-                    source.write_text(json.dumps(dict(rows=rows),ensure_ascii=False),encoding='utf-8')
-                    worker=root/'artifacts/device-audit/workspace-export.mjs'
-                    if not worker.is_file():worker=Path(__file__).resolve().parent/'artifacts/device-audit/workspace-export.mjs'
-                    try:result=subprocess.run([str(NODE),str(worker),str(source),str(target)],capture_output=True,timeout=EXPORT_WORKER_TIMEOUT_SECONDS)
-                    except subprocess.TimeoutExpired:raise ExportTimeout()
-                    if result.returncode:raise ExportFileError()
-                    content=target.read_bytes()
-            except ExportTimeout:raise
-            except OSError:raise ExportFileError()
-            mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        else:raise ValueError('导出格式不正确')
-        return dict(filename=('导入模板' if body.get('template') else '工作台资料')+'.'+fmt,content=base64.b64encode(content).decode(),mime=mime,count=len(rows)-1)
+        heavy_work.acquire()
+        try:
+            ids=body.get('ids')
+            if ids is not None and (not isinstance(ids,list) or len(ids)>5000):raise ValueError('导出筛选范围不正确')
+            export_day=str(body.get('date',day));date.fromisoformat(export_day)
+            rows=data_exchange.table_rows(db,body.get('kind'),set(map(str,ids)) if ids is not None else None,body.get('template') is True,export_day,actor=actor)
+            fmt=body.get('format','xlsx')
+            if fmt=='csv':
+                stream=io.StringIO();writer=csv.writer(stream);writer.writerows([["'"+str(value) if str(value).startswith(('=','+','-','@')) else value for value in row] for row in rows]);content=stream.getvalue().encode('utf-8-sig');mime='text/csv;charset=utf-8'
+            elif fmt=='xlsx':
+                try:
+                    root=Path(db_path).resolve().parent.parent;folder=root/'artifacts/exports';folder.mkdir(parents=True,exist_ok=True)
+                    with tempfile.TemporaryDirectory(dir=folder) as temporary:
+                        source=Path(temporary)/'input.json';target=Path(temporary)/'export.xlsx'
+                        source.write_text(json.dumps(dict(rows=rows),ensure_ascii=False),encoding='utf-8')
+                        worker=root/'artifacts/device-audit/workspace-export.mjs'
+                        if not worker.is_file():worker=Path(__file__).resolve().parent/'artifacts/device-audit/workspace-export.mjs'
+                        try:result=subprocess.run([str(NODE),str(worker),str(source),str(target)],capture_output=True,timeout=EXPORT_WORKER_TIMEOUT_SECONDS)
+                        except subprocess.TimeoutExpired:raise ExportTimeout()
+                        if result.returncode:raise ExportFileError()
+                        content=target.read_bytes()
+                except ExportTimeout:raise
+                except OSError:raise ExportFileError()
+                mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+            else:raise ValueError('导出格式不正确')
+            return dict(filename=('导入模板' if body.get('template') else '工作台资料')+'.'+fmt,content=base64.b64encode(content).decode(),mime=mime,count=len(rows)-1)
+        finally:
+            heavy_work.release()
     raise ValueError('接口不存在')

@@ -118,3 +118,12 @@ def save(db,body,actor,day,create=False):
         import office_scope
         office_scope.save_assignment(db,actor,'accounts',account_id,body,create)
     return account_id
+
+def board_account(db, account_id, day):
+    from sql_dialect import integer_order
+    accounts=[dict(row) for row in db.execute('SELECT a.*,COALESCE(d.published,0) AS published FROM accounts a LEFT JOIN daily d ON d.account_id=a.id AND d.day=? ORDER BY '+integer_order(db,'a.computer_id')+',a.slot',(day,))]
+    account_lifecycle.enrich(accounts, day)
+    phone_devices.overview(db, accounts)
+    found=next((row for row in accounts if str(row['id'])==str(account_id)),None)
+    if not found:raise ValueError('账号不存在')
+    return found
