@@ -32,10 +32,25 @@ def migrate(db):
         db.execute("UPDATE nurture_records SET legacy_started_on=started_on,started_on=CASE WHEN completed_on='' THEN '' ELSE started_on END,workflow=CASE WHEN completed_on='' THEN '待开始' ELSE '已结束' END")
 
 def elapsed(record,today):
-    return record['banked_days']+(max(0,(date.fromisoformat(today)-date.fromisoformat(record['active_since'])).days) if record['workflow']=='运行' and record['active_since'] else 0)
+    banked=record['banked_days'] or 0
+    if record['workflow']!='运行' or not record['active_since']:return banked
+    try:return banked+max(0,(date.fromisoformat(today)-date.fromisoformat(record['active_since'])).days)
+    except (TypeError,ValueError):return banked
+
+def stored_periods(raw):
+    try:parsed=json.loads(raw if isinstance(raw,str) else '[]')
+    except (json.JSONDecodeError,TypeError,ValueError):return []
+    return [period for period in parsed if isinstance(period,dict)] if isinstance(parsed,list) else []
+
+def period_spans(raw):
+    spans=[]
+    for period in stored_periods(raw):
+        try:spans.append((date.fromisoformat(period['start']),date.fromisoformat(period['end'])))
+        except (KeyError,TypeError,ValueError):continue
+    return spans
 
 def pause(db,record,today):
-    periods=json.loads(record['periods'])
+    periods=stored_periods(record['periods'])
     periods.append(dict(start=record['active_since'],end=today))
     db.execute("UPDATE nurture_records SET banked_days=?,periods=?,active_since='',paused_on=?,workflow='暂停',revision=revision+1 WHERE account_id=?",
                (elapsed(record,today),json.dumps(periods),today,record['account_id']))
@@ -64,19 +79,24 @@ def overview(db,today,allowed_accounts=None):
         if allowed_accounts is not None and row['account_id'] not in allowed_accounts:continue
         item=dict(row);start=item['started_on']
         days=elapsed(item,today)
-        status=db.execute('SELECT status FROM accounts WHERE id=?',(item['account_id'],)).fetchone()[0]
+        status_row=db.execute('SELECT status FROM accounts WHERE id=?',(item['account_id'],)).fetchone()
+        status=status_row[0] if status_row else ''
         stage=('已结束' if item['completed_on'] else '状态待核对' if status not in USABLE else
                '养号暂停' if item['workflow']=='暂停' else '核对处理中' if item['verification_state']=='核对处理中' else
                '待检查' if item['verification_state']=='待检查' else '待开始养号' if item['workflow']=='待开始' else
                '到期待转发布' if days>=7 else '养号中')
-        due=(date.fromisoformat(item['active_since'])+timedelta(days=max(0,7-item['banked_days']))).isoformat() if item['workflow']=='运行' else ''
+        due=''
+        if item['workflow']=='运行' and item['active_since']:
+            try:due=(date.fromisoformat(item['active_since'])+timedelta(days=max(0,7-(item['banked_days'] or 0)))).isoformat()
+            except (TypeError,ValueError):due=''
         day_dates=[]
-        for period in json.loads(item['periods']):
-            day=date.fromisoformat(period['start']);end=date.fromisoformat(period['end'])
+        for start,end in period_spans(item['periods']):
+            day=start
             while day<end and len(day_dates)<7:day_dates.append(day.isoformat());day+=timedelta(days=1)
         if item['active_since']:
-            day=date.fromisoformat(item['active_since'])
-            while len(day_dates)<7:day_dates.append(day.isoformat());day+=timedelta(days=1)
+            try:day=date.fromisoformat(item['active_since'])
+            except (TypeError,ValueError):day=None
+            while day is not None and len(day_dates)<7:day_dates.append(day.isoformat());day+=timedelta(days=1)
         item.update(elapsed=days,remaining_days=max(0,7-days),due_on=due,stage=stage,day_dates=day_dates)
         item['images']=[dict(r) for r in db.execute('SELECT id,day,actor FROM nurture_images WHERE account_id=? AND cycle=? ORDER BY day,id',(item['account_id'],item['cycle']))]
         item['past_images']=[dict(r) for r in db.execute('SELECT id,day,actor,cycle FROM nurture_images WHERE account_id=? AND cycle<>? ORDER BY cycle,day,id',(item['account_id'],item['cycle']))]

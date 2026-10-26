@@ -219,6 +219,9 @@ class Handler(SimpleHTTPRequestHandler):
             return self.database_failure(error)
         except auth.AccessError as error:
             return self.reply({'error':str(error)},error.status)
+        except Exception as error:
+            self.log_error('读取接口失败 %s',type(error).__name__)
+            return self.reply({'error':'页面数据暂时读不出来，请稍后刷新'},500)
 
     def database_failure(self,error):
         state=getattr(error,'sqlstate',None)

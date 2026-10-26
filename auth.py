@@ -119,9 +119,14 @@ def can_setup(db,header):
     return not initialized(db) and bool(token) and bool(db.execute('SELECT 1 FROM auth_setup WHERE token_hash=? AND expires_at>?',(digest(token),int(time.time()))).fetchone())
 
 
+def listed_permissions(raw):
+    try:parsed=json.loads(raw if isinstance(raw,str) else '[]')
+    except (json.JSONDecodeError,TypeError,ValueError):return []
+    return parsed if isinstance(parsed,list) else []
+
 def public_user(row):
     return dict(id=row['id'],username=row['username'],name=row['name'],role=row['role'],active=bool(row['active']),
-                permissions=list(PERMISSIONS) if row['role']=='owner' else json.loads(row['permissions']))
+                permissions=list(PERMISSIONS) if row['role']=='owner' else listed_permissions(row['permissions']))
 
 
 def session(db,header):

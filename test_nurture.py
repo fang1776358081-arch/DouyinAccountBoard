@@ -201,6 +201,21 @@ class NurtureTest(unittest.TestCase):
         self.call('/api/workspace/nurture/pause',dict(id='43'),staff)
         self.reject(403,'/api/workspace/nurture/resume',dict(id='43'),staff)
 
+    def test_malformed_nurture_periods_still_load_the_board(self):
+        account=self.board()['accounts'][0]['id']
+        with app.connect() as db:
+            db.execute("INSERT INTO nurture_records(account_id,workflow,active_since,banked_days,periods) VALUES(?,?,?,?,?)",(account,'运行','not-a-date',0,'[]'))
+        samples=('null','{}','"text"','not-json','[{}]','[{"start":"2026-10-01","end":"2026-10-03"}]')
+        record=None
+        for raw in samples:
+            with app.connect() as db:
+                db.execute('UPDATE nurture_records SET periods=? WHERE account_id=?',(raw,account))
+            board=self.board()
+            self.assertTrue(any(row['id']==account for row in board['accounts']),raw)
+            record=next(row for row in board['nurture']['records'] if row['account_id']==account)
+            self.assertIsInstance(record['day_dates'],list,raw)
+        self.assertEqual(record['day_dates'][:2],['2026-10-01','2026-10-02'])
+
     def test_completed_cycle_is_not_reopened_by_source_status(self):
         self.start(7)
         self.call('/api/workspace/nurture/finish',dict(id='43'),self.owner)
