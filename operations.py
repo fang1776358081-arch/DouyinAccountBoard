@@ -75,7 +75,7 @@ def version_identity(key):
         try:slot=int(slot)
         except ValueError:raise ValueError('资料版本编号不正确') from None
         return table,{'batch':batch,'computer_id':computer_id,'slot':slot}
-    return table,{TABLE_KEYS[table][0]:rest}
+    return table,{{**TABLE_KEYS,**WORKFLOW_TABLE_KEYS}[table][0]:rest}
 
 
 def versions_for(db,keys,context=None):
@@ -88,7 +88,7 @@ def versions_for(db,keys,context=None):
     result={}
     for key in keys:
         table,ident=version_identity(key)
-        columns=TABLE_KEYS[table]
+        columns={**TABLE_KEYS,**WORKFLOW_TABLE_KEYS}[table]
         row=db.execute('SELECT * FROM '+table+' WHERE '+' AND '.join(column+'=?' for column in columns),tuple(ident[column] for column in columns)).fetchone()
         if row is None:
             result[key]=None

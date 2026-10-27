@@ -451,6 +451,39 @@ class DeviceWorkflowTest(unittest.TestCase):
         saved = next(row for row in self.board()['phone_cards']['cards'] if row['id'] == card['id'])
         self.assertEqual(saved['carrier'], '合成修改运营商')
 
+    def test_workspace_summary_preserves_workflow_without_full_version_snapshot(self):
+        self.create_device('29', '在用')
+        unit = self.confirmed_account('29')
+        case_id = self.action('open_case', unit_id=unit['id'], reason='合成摘要集成故障',
+                              affected_account_ids=['synth-account-1'])['case_id']
+        card = self.create_card('19900000061')
+        self.action('place_card', card_id=card['id'], unit_id=unit['id'], slot='待确认',
+                    confirm_existing=True, confirmed_usable=True)
+        full = self.board()
+        with patch.object(operations, 'versions', side_effect=AssertionError('summary computed the full snapshot')):
+            work = self.call('/api/board?view=work')
+            detail = self.call('/api/board?view=detail')
+        self.assertEqual(work['workspace_view'], 'summary')
+        self.assertEqual(work['record_versions'], {})
+        self.assertNotIn('events', work['device_workflow'])
+        self.assertEqual({task['kind'] for task in work['device_workflow']['todos']},
+                         {'device_case', 'account_recovery'})
+        summary_unit = next(row for row in work['device_workflow']['units'] if row['id'] == unit['id'])
+        self.assertEqual(set(summary_unit), {'id', 'device_id', 'label'})
+        account = next(row for row in work['accounts'] if row['id'] == 'synth-account-1')
+        self.assertEqual(account['device_access']['login_state'], '登录受阻')
+        self.assertEqual(set(account['device_access']), {'login_state', 'recovery_state'})
+        self.assertEqual(detail['record_versions'], {})
+        self.assertTrue(any(row['id'] == case_id for row in detail['device_workflow']['cases']))
+        self.assertTrue(detail['device_workflow']['events'])
+        keys = ['unit:' + unit['id'], 'case:' + case_id, 'access:synth-account-1',
+                'placement:' + str(card['id'])]
+        found = self.call('/api/record-versions?keys=' + ','.join(keys))['record_versions']
+        self.assertEqual(found, {key: full['record_versions'][key] for key in keys})
+        self.assertEqual(self.call('/api/record-versions?keys=unit:missing')['record_versions'],
+                         {'unit:missing': None})
+        self.reject(400, '/api/record-versions?keys=unknown:bad', None)
+
     def test_legacy_device_editor_cannot_overwrite_newer_physical_record(self):
         device = self.create_device('86', '可用闲置')
         earlier = self.board()['record_versions']
