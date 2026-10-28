@@ -13,6 +13,7 @@ import data_exchange
 import heavy_work
 import operations
 import nurture
+import office_three_import
 
 class ExportTimeout(Exception):
     pass
@@ -34,6 +35,8 @@ def get(db,actor,path,query,db_path):
 
 
 def post(db,actor,path,body,db_path,day):
+    if path=='/api/workspace/office-three-import-preview':return office_three_import.preview(db,actor,body,day)
+    if path=='/api/workspace/office-three-import-apply':return office_three_import.apply(db,actor,body,day)
     if path.startswith('/api/workspace/nurture/'):return nurture.post(db,actor,path,body,day)
     if path=='/api/account/nurture':
         started=str(body.get('started',''))
