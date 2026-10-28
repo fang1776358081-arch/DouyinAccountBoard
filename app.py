@@ -560,6 +560,11 @@ class Handler(SimpleHTTPRequestHandler):
                 if body.get('request_id') and getattr(db,'restore_generation',None):
                     return self.idempotent_create(db,actor,self.path,body,lambda database,current:office_scope.reassign(database,current,body),recheck=lambda database,current:auth.require(current,'owner'),record_operations=False)
                 return finish(office_scope.reassign(db,actor,body))
+            if self.path=='/api/auth/username':
+                try:username=auth.change_username(db,actor,body)
+                except integrity_errors() as error:raise ValueError('登录名已存在') from error
+                if username is None:return finish({'error':'当前密码不正确'},400)
+                return finish({'ok':True},headers=[('Set-Cookie',auth.cookie('board_session','',secure,0))])
             if self.path=='/api/auth/password':
                 row=db.execute('SELECT * FROM auth_users WHERE id=?',(actor['id'],)).fetchone()
                 if not auth.password_matches(body.get('old_password'),row['password_hash']):raise ValueError('原密码不正确')

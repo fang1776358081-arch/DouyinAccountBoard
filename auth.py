@@ -197,6 +197,27 @@ def login(db,body,ip):
     return new_session(db,row['id'])
 
 
+def change_username(db,actor,body):
+    """Rename the existing owner only; None persists a failed password check."""
+    require(actor,'owner')
+    now=int(time.time());key=digest('username-change:'+str(actor['id']))
+    limit=db.execute('SELECT * FROM auth_limits WHERE key=? AND expires_at>?',(key,now)).fetchone()
+    if limit and limit['failures']>=5:raise AccessError('验证尝试过多，请15分钟后再试',429)
+    row=db.execute('SELECT * FROM auth_users WHERE id=?',(actor['id'],)).fetchone()
+    if not password_matches(body.get('current_password'),row['password_hash']):
+        db.execute('INSERT INTO auth_limits VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET failures=CASE WHEN auth_limits.expires_at<=? THEN 1 ELSE auth_limits.failures+1 END,expires_at=CASE WHEN auth_limits.expires_at<=? THEN excluded.expires_at ELSE auth_limits.expires_at END',(key,now+900,now,now))
+        return None
+    if not isinstance(body.get('username'),str):raise ValueError('登录名请使用3至40位字母、数字、点、横线或下划线')
+    username,_=identity(dict(username=body['username'],name=row['name']))
+    if username==row['username']:raise ValueError('新登录名不能与当前登录名相同')
+    if db.execute('SELECT 1 FROM auth_users WHERE username=?',(username,)).fetchone():raise ValueError('登录名已存在')
+    db.execute('UPDATE auth_users SET username=? WHERE id=?',(username,actor['id']))
+    db.execute('DELETE FROM auth_sessions WHERE user_id=?',(actor['id'],))
+    db.execute('DELETE FROM auth_limits WHERE key=?',(key,))
+    audit(db,actor,'修改本人登录名',row['username']+' → '+username)
+    return username
+
+
 def save_user(db,actor,body):
     require(actor,'owner')
     role=body.get('role','employee');permissions=body.get('permissions',DEFAULTS.get(role,[]));active=body.get('active',True)
