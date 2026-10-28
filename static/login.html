@@ -1,3 +1,50 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 · 抖音账号工作台</title><link rel="stylesheet" href="/auth.css"></head>
-<body class="login-page"><section class="login-box"><div class="login-brand">矩 · 抖音账号工作台</div><h1 id="loginTitle">登录工作台</h1><p id="loginHint">每人独立登录，共用一份工作数据。</p><form id="loginForm"><label id="setupName" hidden>你的姓名<input id="loginName" maxlength="60" autocomplete="name"></label><label>登录名<input id="loginUsername" required minlength="3" maxlength="40" pattern="[A-Za-z0-9_.-]+" autocomplete="username" placeholder="字母或数字，例如 admin"></label><label>密码<input id="loginPassword" type="password" required minlength="10" maxlength="128" autocomplete="current-password" placeholder="至少10位"></label><label id="confirmField" hidden>确认密码<input id="loginConfirm" type="password" minlength="10" maxlength="128" autocomplete="new-password"></label><p id="loginError" role="alert"></p><button id="loginSubmit" type="submit">登录</button></form><p class="login-footer">只有总管理员可以创建人员、调整权限和停用账号。</p></section><script src="/login.js?v=20261020-office3"></script></body></html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#12213a">
+  <title>登录 · 抖音账号工作台</title>
+  <link rel="stylesheet" href="/auth.css">
+  <link rel="stylesheet" href="/login-theme.css?v=20261028">
+</head>
+<body class="login-page enterprise-login">
+  <main class="login-layout">
+    <section class="login-intro" aria-labelledby="loginExperienceTitle">
+      <div class="login-brand">
+        <span class="login-brand-mark" aria-hidden="true">矩</span>
+        <div><strong>抖音账号工作台</strong><span class="login-brand-en">DOUYIN ACCOUNT BOARD</span></div>
+      </div>
+      <div class="login-intro-main">
+        <div class="login-intro-eyebrow"><span aria-hidden="true"></span>账号运营 · 团队协作</div>
+        <h2 id="loginExperienceTitle">让日常运营，<br>有条不紊。</h2>
+        <p class="login-intro-description">把账号资料、设备关系与日常工作<br class="login-desktop-break">整理到同一个工作空间。</p>
+        <ul class="login-capabilities" aria-label="工作台功能概览">
+          <li><span class="login-line-icon login-line-icon--accounts" aria-hidden="true"></span><div><strong>集中管理资料</strong><p>账号、设备与手机卡，关联清晰可查。</p></div></li>
+          <li><span class="login-line-icon login-line-icon--tasks" aria-hidden="true"></span><div><strong>衔接日常工作</strong><p>查看待办、养号进度与每日发布记录。</p></div></li>
+          <li><span class="login-line-icon login-line-icon--history" aria-hidden="true"></span><div><strong>保留处理过程</strong><p>记录设备故障、账号恢复和操作历史。</p></div></li>
+        </ul>
+      </div>
+      <div class="login-intro-footer"><span class="login-footer-rule" aria-hidden="true"></span>专注运营，让协作有据可循。</div>
+    </section>
+    <section class="login-entry" aria-labelledby="loginTitle">
+      <div class="login-box">
+        <div class="login-entry-label"><span aria-hidden="true"></span>进入你的工作空间</div>
+        <h1 id="loginTitle">登录工作台</h1>
+        <p id="loginHint">每人独立登录，共用一份工作数据。</p>
+        <form id="loginForm">
+          <label id="setupName" for="loginName" hidden>你的姓名<input id="loginName" maxlength="60" autocomplete="name"></label>
+          <label for="loginUsername">登录名<input id="loginUsername" required minlength="3" maxlength="40" pattern="[A-Za-z0-9_.-]+" autocomplete="username" placeholder="字母或数字，例如 admin"></label>
+          <label for="loginPassword">密码<input id="loginPassword" type="password" required minlength="10" maxlength="128" autocomplete="current-password" placeholder="至少10位"></label>
+          <label id="confirmField" for="loginConfirm" hidden>确认密码<input id="loginConfirm" type="password" minlength="10" maxlength="128" autocomplete="new-password"></label>
+          <p id="loginError" role="alert"></p>
+          <button id="loginSubmit" type="submit">登录</button>
+        </form>
+        <div class="login-access-note"><span class="login-note-icon" aria-hidden="true">i</span><p class="login-footer">只有总管理员可以创建人员、调整权限和停用账号。</p></div>
+      </div>
+      <p class="login-entry-footer">抖音账号工作台<span aria-hidden="true">·</span>团队统一工作入口</p>
+    </section>
+  </main>
+  <script src="/login.js?v=20261020-office3"></script>
+</body>
+</html>

@@ -10,8 +10,8 @@ backup.py backup_management.py batch_edit.py collection.py data_exchange.py
 nurture.py operations.py phone_cards.py phone_devices.py publishing_layout.py
 workspace_service.py release_policy.py sql_dialect.py office_scope.py idempotency.py device_workflow.py'''.split()
 STATIC_FILES = '''app.js auth-ui.js auth.css batch-edit.css batch-edit.js board-fit.css
-collection-panel.js edit-versions.js field-search.css field-search.js identity-labels.js
-index.html lifecycle.js login.html login.js nurture.js offices.js phone-cards.js
+collection-panel.js console-theme.css edit-versions.js field-search.css field-search.js identity-labels.js
+index.html lifecycle.js login.html login.js login-theme.css nurture.js offices.js phone-cards.js
 phone-devices.js publishing-layout.js publishing-match.css publishing-match.js
 publishing-pending.css publishing-pending.js styles.css users.css users.html users.js
 verification.css verification.js scope-ui.js workspace-model.js workspace-shortcuts.js workspace.css
