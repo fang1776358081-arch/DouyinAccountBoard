@@ -21,6 +21,7 @@ import phone_devices
 OFFICE_ID = 'three'
 KIND = 'office-three-dual-import'
 CONFIRMATION = '导入办公室三'
+SCOPE_CONFIRMATION = '仅分配电脑到办公室三'
 SOURCE_URL = 'https://docs.qq.com/sheet/DRWxWc1huUWFsVkZp?tab=nh0fs2'
 ACCOUNTS_HEADERS = ['来源行', '注册手机号', '昵称', '登录手机序号', '抖音号', '小号说明',
                     '门头', '负责人', '登记电脑序号', '来源类型', '来源账号状态', '违规备注', '使用状态', '注册日期']
@@ -158,6 +159,22 @@ def _registered(value, day):
 
 def _item(kind, row, action, label, reason=''):
     return dict(kind=kind, row=row, action=action, label=label, reason=reason)
+
+
+def _scope_candidates(db, progress_rows):
+    """Offer existing, unassigned source PCs; names/prefixes grant no scope."""
+    counts = Counter(_digits(row['电脑序号'], True) for row in progress_rows)
+    result = []
+    for row in progress_rows:
+        number = _digits(row['电脑序号'], True)
+        if not number or counts[number] != 1:
+            continue
+        if any(len(row[field]) > 100 for field in ('负责人', '临时负责人', '类别')):
+            continue
+        ident = 'office3:' + number
+        if db.execute('SELECT 1 FROM computers WHERE id=?', (ident,)).fetchone() and not office_scope.entity_offices(db, 'computers', ident):
+            result.append(dict(id=ident))
+    return sorted(result, key=lambda item: int(item['id'].split(':')[1]))
 
 
 def _plan(db, account_rows, progress_rows, day):
@@ -358,10 +375,75 @@ def preview(db, actor, body, day):
     account_rows, progress_rows = _read_sources(body)
     before = _snapshot(db)
     plan, summary, items, warnings = _plan(db, account_rows, progress_rows, day)
-    payload = dict(office_id=OFFICE_ID, guard=operations.token(before), plan=plan, summary=summary)
+    scope_candidates = _scope_candidates(db, progress_rows)
+    payload = dict(office_id=OFFICE_ID, guard=operations.token(before), plan=plan, summary=summary,
+                   scope_candidates=scope_candidates)
     preview_id = operations.preview(db, actor, KIND, payload)
     return dict(preview_id=preview_id, office_id=OFFICE_ID, summary=summary, rows=items,
-                warnings=warnings, confirmation=CONFIRMATION)
+                warnings=warnings, confirmation=CONFIRMATION, scope_candidates=scope_candidates)
+
+
+def _verify_computer_scopes(db, before, requested):
+    after = _snapshot(db)
+    if before['records'].keys() != after['records'].keys():
+        raise operations.ConflictError('电脑归属保留校验失败：业务记录数量变化，整次操作已撤销')
+    for key, old in before['records'].items():
+        old_fields = {field: value for field, value in old.items() if field != 'office_ids'}
+        new_fields = {field: value for field, value in after['records'][key].items() if field != 'office_ids'}
+        if old_fields != new_fields:
+            raise operations.ConflictError('电脑归属保留校验失败：原业务字段变化，整次操作已撤销')
+    for table, old in before['extra'].items():
+        expected = old
+        if table == 'computer_offices':
+            expected = sorted([*old, *(dict(computer_id=ident, office_id=OFFICE_ID) for ident in requested)],
+                              key=operations.encoded)
+        if after['extra'][table] != expected:
+            raise operations.ConflictError('电脑归属保留校验失败：并非仅分配所选电脑，整次操作已撤销')
+    return dict(business_fields_preserved=True, only_requested_computers_assigned=True,
+                other_entity_scopes_preserved=True)
+
+
+def assign_computer_scopes(db, actor, body, day):
+    """Confirm a chosen subset of the actor-bound preview's unassigned PCs.
+
+    This never imports business data. Success consumes the old plan so callers
+    must request a new preview against the newly confirmed explicit scopes.
+    """
+    actor = _require(db, actor, body)
+    if body.get('confirmation') != SCOPE_CONFIRMATION:
+        raise ValueError('请明确输入“仅分配电脑到办公室三”后确认')
+    selected = body.get('computer_ids')
+    if (not isinstance(selected, list) or not 1 <= len(selected) <= 100 or
+            any(type(value) is not str or not re.fullmatch(r'office3:[1-9][0-9]{0,5}', value) for value in selected) or
+            len(set(selected)) != len(selected)):
+        raise ValueError('请选择1至100台不重复的来源电脑')
+    ident = body.get('preview_id')
+    if not isinstance(ident, str) or not re.fullmatch(r'[a-f0-9]{32}', ident):
+        raise ValueError('预览编号不正确，请重新预览')
+    payload = operations.take_preview(db, actor, ident, KIND)
+    available = {item['id'] for item in payload.get('scope_candidates', [])}
+    if not set(selected) <= available:
+        raise ValueError('只能确认本次预览列出的尚未分配来源电脑，请重新预览')
+    before = _snapshot(db)
+    if payload.get('office_id') != OFFICE_ID or payload['guard'] != operations.token(before):
+        raise operations.ConflictError('预览后资料或归属已变化，请重新预览；未保存任何归属修改')
+    for computer_id in selected:
+        if office_scope.entity_offices(db, 'computers', computer_id):
+            raise operations.ConflictError('所选电脑已经有办公室归属，请重新预览；未移动任何电脑')
+    selected = sorted(selected)
+    db.execute('SAVEPOINT office_three_computer_scopes')
+    try:
+        for computer_id in selected:
+            office_scope.assign_entity(db, actor, 'computers', computer_id, [OFFICE_ID])
+        verification = _verify_computer_scopes(db, before, selected)
+        db.execute('DELETE FROM operations_previews WHERE id=?', (ident,))
+    except Exception:
+        db.execute('ROLLBACK TO office_three_computer_scopes')
+        db.execute('RELEASE office_three_computer_scopes')
+        raise
+    db.execute('RELEASE office_three_computer_scopes')
+    return dict(ok=True, office_id=OFFICE_ID, assigned_computer_ids=selected,
+                verification=verification, requires_new_preview=True)
 
 
 def _verify_preserved(db, before):

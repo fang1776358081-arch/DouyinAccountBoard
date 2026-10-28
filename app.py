@@ -638,7 +638,7 @@ class Handler(SimpleHTTPRequestHandler):
                 result = {**result, '_record_versions': self._version_delta}
             idempotency.complete(db, actor, body, 'succeeded', 200, result)
             db.execute('RELEASE SAVEPOINT idem_business')
-            if path in ('/api/device-workflow','/api/workspace/office-three-import-apply'):board_updates.notify_reload(db)
+            if path in ('/api/device-workflow','/api/workspace/office-three-import-apply','/api/workspace/office-three-import-computer-scopes'):board_updates.notify_reload(db)
             db.commit()
             return self.reply(result)
         except AdmissionRejected:
@@ -657,7 +657,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.reply({'error': str(error)}, 400)
 
     def post_response(self):
-        heavy=self.path in ('/api/workspace/import-apply','/api/workspace/office-three-import-apply','/api/workspace/nurture/upload')
+        heavy=self.path in ('/api/workspace/import-apply','/api/workspace/office-three-import-apply','/api/workspace/office-three-import-computer-scopes','/api/workspace/nurture/upload')
         if heavy:heavy_work.acquire()
         try:
             return self._post_response()
@@ -714,7 +714,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if self.path=='/api/account/create' and getattr(db,'restore_generation',None) and not body.get('request_id'):
                     db.rollback()
                     return self.reply({'error':'新增账号必须带请求标识','code':'REQUEST_ID_REQUIRED'},400)
-                if self.path=='/api/workspace/office-three-import-apply':
+                if self.path in ('/api/workspace/office-three-import-apply','/api/workspace/office-three-import-computer-scopes'):
                     idempotency.request_uuid(body.get('request_id'))
                 if self.path=='/api/phone-card' and not body.get('id') and getattr(db,'restore_generation',None) and not body.get('request_id'):
                     db.rollback()
@@ -843,7 +843,7 @@ class Handler(SimpleHTTPRequestHandler):
                         return self.idempotent_create(db,actor,self.path,body,lambda database,current:{'ok':True,'id':phone_devices.save(database,body,create=False,actor=current)})
                     if self.path=='/api/phone-card':
                         return self.idempotent_create(db,actor,self.path,body,lambda database,current:self._save_phone_card(database,current,body))
-                    if self.path in ('/api/workspace/import-apply','/api/workspace/office-three-import-apply'):
+                    if self.path in ('/api/workspace/import-apply','/api/workspace/office-three-import-apply','/api/workspace/office-three-import-computer-scopes'):
                         return self.idempotent_create(db,actor,self.path,body,lambda database,current:workspace_service.post(database,current,self.path,body,DB,today()))
                     if self.path=='/api/workspace/nurture/upload':
                         return self.idempotent_create(db,actor,self.path,body,lambda database,current:workspace_service.post(database,current,self.path,body,DB,today()))
@@ -926,7 +926,7 @@ class Handler(SimpleHTTPRequestHandler):
                 if self.path.startswith('/api/workspace/') or self.path in ['/api/publishing/assignment','/api/account/nurture']:
                     result=workspace_service.post(db,actor,self.path,body,DB,today())
                     operations.finish(self,db,actor,self.path,change_state)
-                    if self.path in ('/api/workspace/restore-apply','/api/workspace/import-apply','/api/workspace/office-three-import-apply'):board_updates.notify_reload(db)
+                    if self.path in ('/api/workspace/restore-apply','/api/workspace/import-apply','/api/workspace/office-three-import-apply','/api/workspace/office-three-import-computer-scopes'):board_updates.notify_reload(db)
                     auth.audit(db,actor,self.path,str(body.get('id',body.get('backup_id',''))))
                     db.commit()
                     return self.reply(result)

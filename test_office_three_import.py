@@ -36,6 +36,7 @@ from sql_dialect import begin_write
 DAY = '2026-10-28'
 PREVIEW_PATH = '/api/workspace/office-three-import-preview'
 APPLY_PATH = '/api/workspace/office-three-import-apply'
+COMPUTER_SCOPES_PATH = '/api/workspace/office-three-import-computer-scopes'
 ACCOUNT_HEADERS = ['来源行', '注册手机号', '昵称', '登录手机序号', '抖音号', '小号说明', '门头',
                    '负责人', '登记电脑序号', '来源类型', '来源账号状态', '违规备注', '使用状态', '注册日期']
 PROGRESS_HEADERS = ['来源行', '电脑序号', '负责人', '临时负责人', '类别'] + ['发布设备' + str(i) for i in range(1, 11)]
@@ -162,6 +163,44 @@ class OfficeThreeFixture(unittest.TestCase):
             begin_write(db)
             return office_three_import.apply(db, self.actor, body, DAY)
 
+    def seed_pending_computers(self):
+        with app.connect() as db:
+            for number in ('3', '4', '5'):
+                db.execute('INSERT INTO computers VALUES(?,?,?,?,?,?)',
+                           ('office3:' + number, '合成待分配电脑' + number, '原自动化资料', '原IP资料', '原负责人', '原类别'))
+            self.insert_account(db, 'old-scope-pending', 'synthetic_scope_pending',
+                                '必须保持待分配的原账号', 'office3:3', 1)
+            db.execute("INSERT INTO daily VALUES('old-scope-pending','2026-10-19',1)")
+            db.execute("INSERT INTO publishing_layout VALUES('synthetic-active','office3:3',1,'old-scope-pending',"
+                       "'原待分配账号位置','原办公室文字','H8','synthetic-pending-source','原有原因')")
+            db.execute("INSERT INTO publishing_layout_links VALUES('synthetic-active','office3:3',1,'原待分配手工理由',?,123)",
+                       (self.actor['id'],))
+
+    def computer_scope_body(self):
+        return self.body(accounts=[account_row(computer='3')], progress=[
+            progress_row('3'), progress_row('4', labels=(), row=4),
+            progress_row('9', labels=(), row=5), progress_row('2', labels=(), row=6),
+            progress_row('1', labels=(), row=7),
+        ])
+
+    def assign_computer_scopes(self, preview, ids=None, **extra):
+        body = {'office_id': 'three', 'preview_id': preview['preview_id'],
+                'computer_ids': ['office3:3'] if ids is None else ids,
+                'confirmation': '仅分配电脑到办公室三', **extra}
+        with app.connect() as db:
+            begin_write(db)
+            return office_three_import.assign_computer_scopes(db, self.actor, body, DAY)
+
+    def assert_only_computer_scopes_added(self, before, approved):
+        after = self.snapshot()
+        expected_scopes = before['computer_offices'] + [
+            {'computer_id': ident, 'office_id': 'three'} for ident in sorted(approved)]
+        self.assertEqual(sorted(after['computer_offices'], key=repr), sorted(expected_scopes, key=repr))
+        for table, rows in before.items():
+            if table != 'computer_offices':
+                with self.subTest(table=table):
+                    self.assertEqual(after[table], rows, 'Only explicitly requested computer scopes may change')
+
     def snapshot(self):
         ignored = {'operations_previews', 'operations_history', 'idempotency_records',
                    'auth_sessions', 'auth_limits', 'auth_audit'}
@@ -184,7 +223,7 @@ class OfficeThreeFixture(unittest.TestCase):
             self.assertFalse(db.execute('PRAGMA foreign_key_check').fetchall())
 
 
-class OfficeThreeImportTest(OfficeThreeFixture):
+class OfficeThreeSourceSafetyTest(OfficeThreeFixture):
     def test_preview_does_not_mutate_business_or_persist_credentials(self):
         before = self.snapshot()
         payload = self.body()
@@ -221,6 +260,133 @@ class OfficeThreeImportTest(OfficeThreeFixture):
             self.assertNotIn(secret, stored)
             self.assertNotIn(secret, rendered)
 
+
+class OfficeThreeComputerScopeTest(OfficeThreeFixture):
+    def setUp(self):
+        super().setUp()
+        self.seed_pending_computers()
+
+    def test_candidates_are_only_existing_unassigned_source_computers(self):
+        before = self.snapshot()
+        result = self.preview(self.computer_scope_body())
+        self.assertEqual(result['scope_candidates'], [{'id': 'office3:3'}, {'id': 'office3:4'}])
+        self.assertEqual(self.snapshot(), before)
+        # office3:5 is unassigned but absent from source; 2 is new; 9 is foreign;
+        # 1 is already scoped. None can be silently included as a candidate.
+        self.assertFalse({'office3:5', 'office3:2', 'office3:9', 'office3:1'} &
+                         {row['id'] for row in result['scope_candidates']})
+
+    def test_only_approved_computer_scope_changes_and_fresh_preview_can_import(self):
+        payload = self.computer_scope_body()
+        result = self.preview(payload)
+        before = self.snapshot()
+        assigned = self.assign_computer_scopes(result)
+        self.assertEqual(assigned['assigned_computer_ids'], ['office3:3'])
+        for key in ('business_fields_preserved', 'only_requested_computers_assigned', 'other_entity_scopes_preserved'):
+            self.assertTrue(assigned['verification'][key])
+        self.assert_only_computer_scopes_added(before, ['office3:3'])
+        with app.connect() as db:
+            self.assertIsNone(db.execute('SELECT id FROM operations_previews WHERE id=?', (result['preview_id'],)).fetchone())
+            self.assertIsNone(db.execute("SELECT office_id FROM account_offices WHERE account_id='old-scope-pending'").fetchone())
+        with self.assertRaises(ValueError):
+            self.apply(result)
+        with self.assertRaises(ValueError):
+            self.assign_computer_scopes(result)
+        scoped_state = self.snapshot()
+        fresh = self.preview(payload)
+        self.assertEqual(fresh['scope_candidates'], [{'id': 'office3:4'}])
+        self.assertEqual(fresh['summary']['new_accounts'], 1)
+        self.apply(fresh)
+        self.assert_old_rows_preserved(scoped_state)
+        with app.connect() as db:
+            account = db.execute("SELECT * FROM accounts WHERE douyin_id='synthetic_new_2'").fetchone()
+            self.assertEqual(account['computer_id'], 'office3:3')
+            self.assertEqual(db.execute('SELECT office_id FROM account_offices WHERE account_id=?', (account['id'],)).fetchone()[0], 'three')
+            self.assertIsNone(db.execute("SELECT office_id FROM account_offices WHERE account_id='old-scope-pending'").fetchone())
+            self.assertIsNone(db.execute("SELECT office_id FROM computer_offices WHERE computer_id='office3:4'").fetchone())
+        self.assert_clean_database()
+
+    def test_unrequested_duplicate_and_invalid_ids_or_confirmation_are_rejected(self):
+        result = self.preview(self.computer_scope_body())
+        before = self.snapshot()
+        invalid_ids = [[], ['office3:5'], ['office3:9'], ['office3:2'], ['office3:1'],
+                       ['office3:3', 'office3:3'], ['office3:3', 'office3:5'], [True],
+                       'office3:3', [None], ['office3:3'] * 101]
+        for ids in invalid_ids:
+            with self.subTest(ids=ids), self.assertRaises(ValueError):
+                self.assign_computer_scopes(result, ids)
+        for extra in ({'confirmation': '导入办公室三'}, {'confirmation': ''}, {'office_id': 'synthetic-other'}):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                self.assign_computer_scopes(result, **extra)
+        self.assertEqual(self.snapshot(), before)
+        with app.connect() as db:
+            self.assertIsNotNone(db.execute('SELECT id FROM operations_previews WHERE id=?', (result['preview_id'],)).fetchone())
+
+    def test_changed_guard_and_target_scope_race_are_rejected(self):
+        result = self.preview(self.computer_scope_body())
+        with app.connect() as db:
+            db.execute("INSERT INTO computer_offices VALUES('office3:3','synthetic-other')")
+        before = self.snapshot()
+        with self.assertRaises(operations.ConflictError):
+            self.assign_computer_scopes(result)
+        self.assertEqual(self.snapshot(), before)
+        with app.connect() as db:
+            self.assertEqual(db.execute("SELECT office_id FROM computer_offices WHERE computer_id='office3:3'").fetchone()[0], 'synthetic-other')
+
+    def test_mid_write_failure_rolls_back_all_assignments_and_keeps_preview(self):
+        result = self.preview(self.computer_scope_body())
+        before = self.snapshot()
+        with app.connect() as db:
+            db.execute("CREATE TRIGGER synthetic_reject_second_scope BEFORE INSERT ON computer_offices "
+                       "WHEN NEW.computer_id='office3:4' BEGIN SELECT RAISE(ABORT,'synthetic scope constraint'); END")
+        with self.assertRaises((ValueError, sqlite3.IntegrityError)):
+            self.assign_computer_scopes(result, ['office3:3', 'office3:4'])
+        self.assertEqual(self.snapshot(), before)
+        with app.connect() as db:
+            self.assertIsNotNone(db.execute('SELECT id FROM operations_previews WHERE id=?', (result['preview_id'],)).fetchone())
+
+    def test_unexpected_business_mutation_during_scope_assignment_is_rolled_back(self):
+        result = self.preview(self.computer_scope_body())
+        before = self.snapshot()
+        with app.connect() as db:
+            db.execute("CREATE TRIGGER synthetic_bad_scope_side_effect AFTER INSERT ON computer_offices "
+                       "WHEN NEW.computer_id='office3:3' BEGIN UPDATE accounts SET note='合成模拟意外改动' "
+                       "WHERE id='old-scope-pending'; END")
+        with self.assertRaises(operations.ConflictError):
+            self.assign_computer_scopes(result)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_fresh_owner_and_admitted_transaction_are_required_for_scope_assignment(self):
+        result = self.preview(self.computer_scope_body())
+        body = {'office_id': 'three', 'preview_id': result['preview_id'], 'computer_ids': ['office3:3'],
+                'confirmation': '仅分配电脑到办公室三'}
+        with app.connect() as db:
+            self.assertFalse(db.in_transaction)
+            with self.assertRaises(ValueError):
+                office_three_import.assign_computer_scopes(db, self.actor, body, DAY)
+        with app.connect() as db:
+            db.execute("UPDATE auth_users SET role='viewer' WHERE id=?", (self.actor['id'],))
+        before = self.snapshot()
+        with self.assertRaises(auth.AccessError):
+            self.assign_computer_scopes(result)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_scope_assignment_preview_is_actor_bound_and_expires(self):
+        result = self.preview(self.computer_scope_body())
+        before = self.snapshot()
+        with app.connect() as db:
+            db.execute('UPDATE operations_previews SET actor_id=? WHERE id=?', (self.employee_id, result['preview_id']))
+        with self.assertRaises(ValueError):
+            self.assign_computer_scopes(result)
+        with app.connect() as db:
+            db.execute('UPDATE operations_previews SET actor_id=?,expires_at=1 WHERE id=?',
+                       (self.actor['id'], result['preview_id']))
+        with self.assertRaises(ValueError):
+            self.assign_computer_scopes(result)
+        self.assertEqual(self.snapshot(), before)
+
+
+class OfficeThreeImportTest(OfficeThreeFixture):
     def test_safe_template_trailing_columns_are_never_persisted(self):
         payload = self.body()
         payload['accounts_file'] = csv_file(ACCOUNT_HEADERS + ['密码'], [account_row() + ['SYNTHETIC_COMPACT_SECRET']])
@@ -601,6 +767,46 @@ class OfficeThreeImportHTTPTest(OfficeThreeFixture):
         self.assertEqual(self.snapshot(), after)
         reused = self.call(APPLY_PATH, {**apply_body, 'confirmation': '其他内容'})
         self.assertEqual(reused[0], 409, reused)
+        self.assertEqual(self.snapshot(), after)
+        self.assert_clean_database()
+
+    def test_computer_scope_route_enforces_owner_csrf_origin_and_uuid(self):
+        self.seed_pending_computers()
+        status, result = self.call(PREVIEW_PATH, self.computer_scope_body())
+        self.assertEqual(status, 200, result)
+        body = {'office_id': 'three', 'preview_id': result['preview_id'], 'computer_ids': ['office3:3'],
+                'confirmation': '仅分配电脑到办公室三', '_expected_versions': {}}
+        before = self.snapshot()
+        for client, expected in ((urllib.request.build_opener(), 401), (self.employee, 403)):
+            self.assertEqual(self.call(COMPUTER_SCOPES_PATH, {**body, 'request_id': str(uuid4())}, client)[0], expected)
+        headers = self.owner.addheaders
+        self.owner.addheaders = []
+        try:
+            self.assertEqual(self.call(COMPUTER_SCOPES_PATH, {**body, 'request_id': str(uuid4())})[0], 403)
+        finally:
+            self.owner.addheaders = headers
+        self.assertEqual(self.call(COMPUTER_SCOPES_PATH, {**body, 'request_id': str(uuid4())},
+                                   headers={'Origin': 'http://synthetic.invalid'})[0], 403)
+        self.assertEqual(self.call(COMPUTER_SCOPES_PATH, body)[0], 400)
+        self.assertEqual(self.call(COMPUTER_SCOPES_PATH, {**body, 'request_id': 'synthetic-invalid'})[0], 400)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_computer_scope_http_replay_writes_once_and_preserves_every_business_field(self):
+        self.seed_pending_computers()
+        status, result = self.call(PREVIEW_PATH, self.computer_scope_body())
+        self.assertEqual(status, 200, result)
+        body = {'office_id': 'three', 'preview_id': result['preview_id'], 'computer_ids': ['office3:3'],
+                'confirmation': '仅分配电脑到办公室三', 'request_id': str(uuid4()), '_expected_versions': {}}
+        before = self.snapshot()
+        first = self.call(COMPUTER_SCOPES_PATH, body)
+        self.assertEqual(first[0], 200, first)
+        self.assertEqual(first[1]['assigned_computer_ids'], ['office3:3'])
+        self.assertTrue(first[1]['requires_new_preview'])
+        self.assert_only_computer_scopes_added(before, ['office3:3'])
+        after = self.snapshot()
+        self.assertEqual(self.call(COMPUTER_SCOPES_PATH, body), first)
+        self.assertEqual(self.snapshot(), after)
+        self.assertEqual(self.call(COMPUTER_SCOPES_PATH, {**body, 'computer_ids': ['office3:4']})[0], 409)
         self.assertEqual(self.snapshot(), after)
         self.assert_clean_database()
 

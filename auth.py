@@ -251,6 +251,7 @@ ACTION_PERMISSIONS={'/api/daily':'publish','/api/bulk-status':'account_status','
       '/api/publishing/assignment':'publishing_manage','/api/account/nurture':'account_status',
       '/api/workspace/import-preview':'data_import','/api/workspace/import-apply':'data_import','/api/workspace/export':'data_export',
       '/api/workspace/office-three-import-preview':'owner','/api/workspace/office-three-import-apply':'owner',
+      '/api/workspace/office-three-import-computer-scopes':'owner',
       '/api/workspace/backup-now':'owner','/api/workspace/restore-preview':'owner','/api/workspace/restore-apply':'owner',
       '/api/lifecycle-status':'account_progress','/api/account/card-readiness':'account_progress',
       '/api/account':'account_manage','/api/account/create':'account_create',

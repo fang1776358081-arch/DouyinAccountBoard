@@ -26,6 +26,23 @@ window.OfficeThreeImport={mount(host,{data,send,esc,table,claimRequestId,settleR
   const result=get('officeThreeImportResult');
   result.innerHTML=`<h4>导入预览 · 目标固定为办公室三</h4><p id="officeThreePreviewSummary">${esc(summaryText(preview.summary))}</p><p>“保留 / 复用”不会修改原账号字段；冲突和无法唯一匹配的项目不会自动写入。预览后资料有变化时必须重新预览。</p>${(preview.warnings||[]).length?'<details><summary>查看来源说明与警告（'+preview.warnings.length+'）</summary><ul>'+preview.warnings.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></details>':''}<div id="officeThreePreviewRows" class="preview-scroll"></div><div class="auth-actions"><button id="officeThreePrev" type="button" class="button">上一页</button><span id="officeThreePageLabel"></span><button id="officeThreeNext" type="button" class="button">下一页</button></div><form id="officeThreeApplyForm"><label>输入“导入办公室三”确认仅执行安全新增<input id="officeThreeConfirmation" autocomplete="off" required></label><button id="officeThreeApply" type="submit" class="button primary">确认安全新增，保留冲突待核对</button></form>`;
   get('officeThreePrev').onclick=()=>{page--;showRows();};get('officeThreeNext').onclick=()=>{page++;showRows();};showRows();
+  const candidates=preview.scope_candidates||[];
+  if(candidates.length){
+   const section=document.createElement('form');section.id='officeThreeScopeForm';
+   section.innerHTML=`<h4>待分配发布电脑 · 单独确认归属</h4><p>来源表里的以下 ${candidates.length} 台电脑已存在，但尚未分配办公室。只有确认归属后，它们才能参与办公室三的发布安排。此操作只调整列出的电脑归属和相应可见范围；原业务字段、账号归属、发布格行及批次不改，不会导入账号。</p><p id="officeThreeScopeCandidates">${candidates.map(item=>`<span data-computer-scope-id="${esc(item.id)}">${esc(item.id)}</span>`).join('、')}</p><label>核对上方电脑后，输入“仅分配电脑到办公室三”<input id="officeThreeScopeConfirmation" required autocomplete="off"></label><button type="submit" id="officeThreeScopeApply" class="button">仅确认这些电脑的归属，之后重新预览</button>`;
+   get('officeThreeApplyForm').before(section);
+   section.onsubmit=async event=>{
+    event.preventDefault();if(busy||!preview)return;
+    if(get('officeThreeScopeConfirmation').value!=='仅分配电脑到办公室三'){get('officeThreeImportError').textContent='请输入“仅分配电脑到办公室三”确认';return;}
+    const key='office-three-import-computer-scopes:'+preview.preview_id,button=get('officeThreeScopeApply');button.disabled=true;get('officeThreeApply').disabled=true;lock(true);get('officeThreeImportError').textContent='';
+    try{
+     const response=await send('/api/workspace/office-three-import-computer-scopes',{office_id:'three',preview_id:preview.preview_id,computer_ids:candidates.map(item=>item.id),confirmation:'仅分配电脑到办公室三',request_id:claimRequestId(key)});settleRequestId(key);
+     const checks=response.verification||{};preview=null;
+     result.innerHTML=`<h4>电脑归属确认完成</h4><p id="officeThreeScopeApplied">已将 ${(response.assigned_computer_ids||[]).length} 台来源电脑归入办公室三；尚未导入账号或发布安排。</p><p id="officeThreeScopeVerification">${checks.business_fields_preserved===true&&checks.only_requested_computers_assigned===true&&checks.other_entity_scopes_preserved===true?'校验通过：仅指定电脑归属变化；原业务字段、账号归属、旧发布格和全局批次保留。':'未收到完整的归属保留校验，请核对后再继续。'}</p><p>原预览已失效。请点击上方“联合预览（不导入）”，重新核对新增项与冲突，再确认导入。</p>`;
+    }catch(error){settleRequestId(key,error);get('officeThreeImportError').textContent=error.message||'归属确认未完成';button.disabled=false;get('officeThreeApply').disabled=false;}
+    finally{lock(false);}
+   };
+  }
   get('officeThreeApplyForm').onsubmit=async event=>{
    event.preventDefault();if(busy||!preview)return;
    if(get('officeThreeConfirmation').value!=='导入办公室三'){get('officeThreeImportError').textContent='请输入“导入办公室三”确认';return;}
@@ -34,7 +51,7 @@ window.OfficeThreeImport={mount(host,{data,send,esc,table,claimRequestId,settleR
    try{
     const response=await send('/api/workspace/office-three-import-apply',{office_id:'three',preview_id:preview.preview_id,confirmation:'导入办公室三',request_id:claimRequestId(requestKey)});
     settleRequestId(requestKey);const checks=response.verification||{};
-    result.insertAdjacentHTML('afterbegin',`<h4>导入完成 · 办公室三</h4><p id="officeThreeAppliedSummary">${esc(summaryText(response.summary||response))}</p><p id="officeThreeVerification">${checks.original_records_preserved===true&&checks.other_offices_unchanged===true&&checks.active_batch_unchanged===true?'校验通过：原有资料保留，其他办公室与待分配资料未改，全局发布批次未变。':'请刷新资料并核对导入结果；未收到完整保留校验。'}</p><p>冲突项仍未导入，请根据下方预览记录人工核对。没有自动确认设备登录、开启采集或生成每日发布记录。</p><a class="button" href="/?office=three&page=accounts">查看办公室三账号</a>`);get('officeThreeApplyForm').remove();
+    result.insertAdjacentHTML('afterbegin',`<h4>导入完成 · 办公室三</h4><p id="officeThreeAppliedSummary">${esc(summaryText(response.summary||response))}</p><p id="officeThreeVerification">${checks.original_records_preserved===true&&checks.other_offices_unchanged===true&&checks.active_batch_unchanged===true?'校验通过：本次导入前的原有资料保留，其他办公室与待分配资料未改，全局发布批次未变。':'请刷新资料并核对导入结果；未收到完整保留校验。'}</p><p>冲突项仍未导入，请根据下方预览记录人工核对。没有自动确认设备登录、开启采集或生成每日发布记录。</p><a class="button" href="/?office=three&page=accounts">查看办公室三账号</a>`);get('officeThreeApplyForm').remove();get('officeThreeScopeForm')?.remove();
    }catch(error){settleRequestId(requestKey,error);get('officeThreeImportError').textContent=error.message||'导入未完成';button.disabled=false;}
    finally{lock(false);}
   };
