@@ -17,6 +17,21 @@ function accountOffice(account){
  return number>=301&&number<=700?'two':'one';
 }
 function officeAccounts(accounts=data.accounts){return accounts.filter(a=>activeOffice==='all'||accountOffice(a)===activeOffice);}
+function officeFilterResources(resources,kind){
+ if(activeOffice==='all')return resources;
+ const accounts=kind==='computers'?officeAccounts():[];
+ return resources.filter(resource=>{
+  if(kind==='computers'&&resource.id==='unassigned')return accounts.some(a=>a.computer_id==='unassigned');
+  if(data.user?.scope_mode)return Array.isArray(resource.office_ids)&&(activeOffice==='pending'?resource.office_ids.length===0:resource.office_ids.includes(activeOffice));
+  if(kind==='devices')return accountOffice({phone_device_id:resource.id})===activeOffice;
+  return accounts.some(a=>a.computer_id===resource.id)||(data.publishing_layout?.cells||[]).some(cell=>cell.computer_id===resource.id&&publishingCellOffice(cell)===activeOffice);
+ });
+}
+function renderComputerFilter(){
+ const select=$('computer'),value=select.value,computers=officeFilterResources(data.computers,'computers');
+ select.innerHTML='<option value="">全部电脑</option>'+computers.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');
+ select.value=computers.some(c=>c.id===value)?value:'';
+}
 function officeName(){return officeDefinitions.find(o=>o.id===activeOffice)?.name||'全部办公室';}
 function renderOffices(){
  const scoped=!!data.user?.scope_mode;
