@@ -1,5 +1,8 @@
 let matchingCell=null,matchingBatch=null,matchingAccountId=null;
-function publishingCandidateScope(account,cell=matchingCell){return (account.office_group==='three'||String(account.phone_device_id||'').startsWith('office3:'))===String(cell?.computer_id||'').startsWith('office3:');}
+function publishingCandidateScope(account,cell=matchingCell){
+ if(data.user?.scope_mode){const offices=account.office_ids||[],computer=data.computers.find(row=>row.id===cell?.computer_id);return offices.length===1&&computer?.office_ids?.length===1&&offices[0]===computer.office_ids[0];}
+ return (account.office_group==='three'||String(account.phone_device_id||'').startsWith('office3:'))===String(cell?.computer_id||'').startsWith('office3:');
+}
 function publishingCandidatePositions(id){return data.publishing_layout.cells.filter(cell=>cell.account_id===id&&!(cell.computer_id===matchingCell.computer_id&&cell.slot===matchingCell.slot));}
 // Similarity only ranks suggestions; account identity still needs explicit confirmation.
 function publishingNameCore(value){return String(value||'').normalize('NFKC').replace(/^\s*[.。]?\s*\d+(?:号手机|多开(?:抖音)?|小号)?\s*[-—－–]/,'').replace(/[(（]\s*\d+\s*(?:个)?\s*[)）]\s*$/,'').replace(/[\s·,，.。_-]/g,'').toLowerCase();}
@@ -19,7 +22,7 @@ function publishingCandidates(){return data.accounts.filter(account=>publishingC
 function renderPublishingCandidates(){
  matchingAccountId=null;$('matchSelection').textContent='请选择一个账号，再点击确认关联。';$('confirmPublishingMatch').disabled=true;
  const choices=publishingCandidates();$('matchCount').textContent=`找到 ${choices.length} 个账号，最多显示40个；可以继续填写条件缩小范围。同手机且名称相近的账号优先推荐；请核对后选择并确认，不会自动关联。`;
- $('matchCandidates').innerHTML=choices.slice(0,40).map(account=>{const positions=publishingCandidatePositions(account.id),suggestion=publishingSuggestion(account);return `<tr><td><input type="radio" name="publishingAccount" aria-label="选择账号 ${esc(account.name)}" value="${esc(account.id)}" ${positions.length?'disabled':''}></td><td><strong>${esc(accountDisplay(account))}</strong>${suggestion.recommended?`<small class="badge ${positions.length?'':'good'}">${positions.length?'名称相近 · 已有安排':suggestion.exact?'推荐核对 · 名称一致':'近似建议'} · 同手机${esc(suggestion.phone)}${suggestion.exact?'':' · 名称相差'+suggestion.distance+'字'}</small>`:''}<small>${esc(account.account_type||'待确认')} · ${esc(account.status)}</small></td><td>${esc(account.phone_device_name||account.phone_device_id||'未关联手机')}</td><td>${esc(account.douyin_id||'未填写')}</td><td>${positions.length?`已有安排：${positions.map(cell=>esc(cell.source_cell)).join('、')}，不可重复关联`:'可选择'}</td></tr>`;}).join('')||'<tr><td colspan="5">没有符合条件的账号。可清空手机序号等条件后再查找；不会自动新建账号。</td></tr>';
+ $('matchCandidates').innerHTML=choices.slice(0,40).map(account=>{const positions=publishingCandidatePositions(account.id),suggestion=publishingSuggestion(account);return `<tr><td><input type="radio" name="publishingAccount" aria-label="选择账号 ${esc(account.name)}" value="${esc(account.id)}" ${positions.length?'disabled':''}></td><td><strong>${esc(accountDisplay(account))}</strong>${suggestion.recommended?`<small class="badge ${positions.length?'':'good'}">${positions.length?'名称相近 · 已有安排':suggestion.exact?'推荐核对 · 名称一致':'近似建议'} · 同手机${esc(suggestion.phone)}${suggestion.exact?'':' · 名称相差'+suggestion.distance+'字'}</small>`:''}<small>${esc(account.account_type||'待确认')} · ${esc(account.status)}</small></td><td>${esc(accountDeviceDisplay(account,data)||'未关联手机')}</td><td>${esc(account.douyin_id||'未填写')}</td><td>${positions.length?`已有安排：${positions.map(cell=>esc(cell.source_cell)).join('、')}，不可重复关联`:'可选择'}</td></tr>`;}).join('')||'<tr><td colspan="5">没有符合条件的账号。可清空手机序号等条件后再查找；不会自动新建账号。</td></tr>';
 }
 function openPublishingMatch(computer,slot){
  if(!hasPermission('publishing_manage'))return toast('当前账号没有管理发布格子关联权限');
@@ -45,7 +48,7 @@ document.addEventListener('DOMContentLoaded',()=>{
  ['matchPhoneQuery','matchIdQuery','matchNameQuery','matchDouyinQuery'].forEach(id=>$(id).oninput=renderPublishingCandidates);
  $('resetMatchSearch').onclick=()=>{['matchPhoneQuery','matchIdQuery','matchNameQuery','matchDouyinQuery'].forEach(id=>$(id).value='');renderPublishingCandidates();};
  $('closePublishingMatch').onclick=()=>$('publishingMatchDialog').close();
- $('matchCandidates').onchange=event=>{if(event.target.name!=='publishingAccount')return;const account=data.accounts.find(account=>account.id===event.target.value);if(!account)return;matchingAccountId=account.id;$('matchSelection').textContent=`确认将 ${matchingCell.source_cell}「${matchingCell.label}」关联到「${account.name}」，抖音号 ${account.douyin_id||'未填写'}，登录手机 ${account.phone_device_id||'未关联'}。`;$('confirmPublishingMatch').disabled=false;};
+ $('matchCandidates').onchange=event=>{if(event.target.name!=='publishingAccount')return;const account=data.accounts.find(account=>account.id===event.target.value);if(!account)return;matchingAccountId=account.id;$('matchSelection').textContent=`确认将 ${matchingCell.source_cell}「${matchingCell.label}」关联到「${account.name}」，抖音号 ${account.douyin_id||'未填写'}，登录手机 ${accountDeviceDisplay(account,data)||'未关联'}。`;$('confirmPublishingMatch').disabled=false;};
  $('publishingMatchForm').onsubmit=event=>{event.preventDefault();savePublishingMatch('link',event.submitter);};
  $('clearPublishingMatch').onclick=()=>savePublishingMatch('clear',$('clearPublishingMatch'));
 });

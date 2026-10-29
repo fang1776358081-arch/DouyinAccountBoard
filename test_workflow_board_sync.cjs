@@ -160,7 +160,7 @@ const cache = page => JSON.parse(page.storage.get('douyin-board-view')).board;
   assert.equal(daily.context.data.cursor, 10, 'daily flags must not replace unrelated board state');
   assert.equal(daily.context.requestSerial, daily.run('requestSerial'));
   assert.equal(cache(daily).date, '2026-10-26');
-  assert.equal(daily.calls.some(call => call.url === '/api/daily-flags?date=2026-10-26'), true);
+  assert.equal(daily.calls.some(call => call.url === '/api/daily-flags?date=2026-10-26&versions=1'), true);
 
   for (const prefix of ['unit', 'placement', 'access', 'case', 'workflow_event']) {
     const page = harness();

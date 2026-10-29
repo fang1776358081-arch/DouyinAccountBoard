@@ -55,8 +55,14 @@ def link(db,body,actor_id):
     account_id=str(body.get('account_id',''))
     account=db.execute('SELECT * FROM accounts WHERE id=?',(account_id,)).fetchone()
     if not account:raise ValueError('请选择工作台中已存在的账号')
-    office_three=account['office_group']=='three' or str(account['phone_device_id'] or '').startswith('office3:')
-    if key[1].startswith('office3:')!=office_three:raise ValueError('来源批次不同：办公室三与原办公室的重号设备必须分开处理')
+    if getattr(db,'scope_enabled',False):
+        import office_scope
+        account_offices=office_scope.entity_offices(db,'accounts',account_id)
+        computer_offices=office_scope.entity_offices(db,'computers',key[1])
+        if len(account_offices)!=1 or account_offices!=computer_offices:raise ValueError('账号与发布电脑必须明确属于同一个办公室')
+    else:
+        office_three=account['office_group']=='three' or str(account['phone_device_id'] or '').startswith('office3:')
+        if key[1].startswith('office3:')!=office_three:raise ValueError('来源批次不同：办公室三与原办公室的重号设备必须分开处理')
     duplicate=db.execute('SELECT source_cell FROM publishing_layout WHERE batch=? AND account_id=? AND NOT(computer_id=? AND slot=?)', (key[0],account_id,key[1],key[2])).fetchone()
     if duplicate:raise ConflictError('该账号已有发布位置 '+duplicate['source_cell']+'，请先核对，不能重复关联')
     if not manual:db.execute('INSERT INTO publishing_layout_links VALUES(?,?,?,?,?,?)',(*key,cell['reason'],actor_id,int(time.time())))

@@ -1,13 +1,13 @@
 function publishingEnabled(){return !!data.publishing_layout?.enabled;}
-function actualPublishingText(account){const cells=(data.publishing_layout?.cells||[]).filter(cell=>cell.account_id===account.id);return cells.length?cells.map(cell=>esc(data.computers.find(host=>host.id===cell.computer_id)?.name||cell.computer_id)+' / 设备'+cell.slot).join('；'):'暂无实际发布安排';}
+function actualPublishingText(account){const index=typeof activeRenderIndex==='undefined'?null:activeRenderIndex,cells=index?index.layoutsByAccount.get(account.id)||[]:(data.publishing_layout?.cells||[]).filter(cell=>cell.account_id===account.id);return cells.length?cells.map(cell=>esc((index?index.computersById.get(cell.computer_id):data.computers.find(host=>host.id===cell.computer_id))?.name||cell.computer_id)+' / 设备'+cell.slot).join('；'):'暂无实际发布安排';}
 function pageAccounts(){
  if(page!=='board'||!publishingEnabled())return data.accounts;
- const byId=new Map(data.accounts.map(a=>[a.id,a]));
+ const byId=typeof activeRenderIndex!=='undefined'&&activeRenderIndex?activeRenderIndex.accountsById:new Map(data.accounts.map(a=>[a.id,a]));
  return data.publishing_layout.cells.filter(c=>c.account_id&&byId.has(c.account_id)).map(c=>({...byId.get(c.account_id),computer_id:c.computer_id,slot:c.slot,publishing_cell:c.source_cell,publishing_label:c.label}));
 }
 function publishingCellOffice(cell){
- const account=data.accounts.find(a=>a.id===cell.account_id);
- return account?accountOffice(account):data.user?.scope_mode?(data.computers.find(c=>c.id===cell.computer_id)?.office_ids?.[0]||'pending'):cell.office;
+ const index=typeof activeRenderIndex==='undefined'?null:activeRenderIndex,account=index?index.accountsById.get(cell.account_id):data.accounts.find(a=>a.id===cell.account_id);
+ return account?accountOffice(account):data.user?.scope_mode?((index?index.computersById.get(cell.computer_id):data.computers.find(c=>c.id===cell.computer_id))?.office_ids?.[0]||'pending'):cell.office;
 }
 function filteredPublishingCells(accounts){
  if(!publishingEnabled())return [];

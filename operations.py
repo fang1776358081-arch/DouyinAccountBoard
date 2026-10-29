@@ -34,7 +34,7 @@ def migrate(db):
         db.execute("ALTER TABLE accounts ADD COLUMN nurture_started TEXT NOT NULL DEFAULT ''")
 
 
-def snapshot(db):
+def snapshot(db,*,daily_day=None):
     result={}
     scoped=getattr(db,'scope_enabled',False)
     if scoped:
@@ -43,20 +43,46 @@ def snapshot(db):
     import device_workflow
     tables = {**TABLE_KEYS, **(WORKFLOW_TABLE_KEYS if device_workflow.available(db) else {})}
     for table in tables:
-        for row in db.execute('SELECT * FROM '+table):
+        rows=db.execute('SELECT * FROM daily WHERE day=?',(daily_day,)) if table=='daily' and daily_day is not None else db.execute('SELECT * FROM '+table)
+        for row in rows:
             value=dict(row)
             if scoped:value['office_ids']=office_scope.record_offices(maps,table,value)
             result[row_key(table,value)]=value
     return result
 
 
-def versions(db,context=None):
-    records=snapshot(db)
+def versions(db,context=None,*,daily_day=None):
+    records=snapshot(db) if daily_day is None else snapshot(db,daily_day=daily_day)
     if context is not None:
         import office_scope
         tables={value:key for key,value in PREFIX.items()}
         records={key:row for key,row in records.items() if office_scope.record_visible(context,tables[key.split(':',1)[0]],row)}
     return {key:token(value) for key,value in records.items()}
+
+
+def daily_versions(db,day,context=None):
+    """Tokens for one date, including absent rows, in the caller's read snapshot."""
+    if type(day) is not str:raise ValueError('日期格式不正确')
+    date.fromisoformat(day)
+    scoped=getattr(db,'scope_enabled',False)
+    ids=context['ids']['accounts'] if context is not None else {row[0] for row in db.execute('SELECT id FROM accounts')}
+    maps=None
+    if scoped:
+        if context is not None:maps=context['maps']
+        else:
+            accounts={}
+            for row in db.execute('SELECT account_id,office_id FROM account_offices'):
+                accounts.setdefault(row[0],[]).append(row[1])
+            maps={'accounts':{ident:sorted(offices) for ident,offices in accounts.items()}}
+    result={'daily:'+str(ident)+':'+day:None for ident in sorted(ids)}
+    for row in db.execute('SELECT * FROM daily WHERE day=?',(day,)):
+        if row['account_id'] not in ids:continue
+        value=dict(row)
+        if scoped:
+            import office_scope
+            value['office_ids']=office_scope.record_offices(maps,'daily',value)
+        result[row_key('daily',value)]=token(value)
+    return result
 
 
 def version_identity(key):
@@ -139,8 +165,32 @@ def targets(db,path,body):
     return sorted(set(keys + device_workflow.legacy_version_keys(db,path,body)))
 
 
+class _DailyRecords(dict):
+    """Private two-record snapshot for the handler that writes only daily."""
+    def __init__(self,ident,day,maps):
+        super().__init__()
+        self.ident,self.day,self.maps=ident,day,maps
+
+
+def _daily_snapshot(db,ident,day):
+    offices=sorted(row[0] for row in db.execute('SELECT office_id FROM account_offices WHERE account_id=?',(ident,)))
+    records=_DailyRecords(ident,day,{'accounts':{ident:offices}})
+    for table,query,params in (
+        ('accounts','SELECT * FROM accounts WHERE id=?',(ident,)),
+        ('daily','SELECT * FROM daily WHERE account_id=? AND day=?',(ident,day))):
+        row=db.execute(query,params).fetchone()
+        if row is not None:
+            value={**dict(row),'office_ids':offices}
+            records[row_key(table,value)]=value
+    return records
+
+
 def before(db,path,body):
-    records=snapshot(db);keys=targets(db,path,body)
+    if path=='/api/daily' and getattr(db,'scope_enabled',False):
+        ident,day=str(body.get('id','')),str(body.get('date',''))
+        records=_daily_snapshot(db,ident,day)
+        keys=sorted(['account:'+ident,'daily:'+ident+':'+day])
+    else:records=snapshot(db);keys=targets(db,path,body)
     expected=body.get('_expected_versions')
     if keys and not isinstance(expected,dict):raise ConflictError('页面版本过旧，请刷新后重新操作；未保存任何修改')
     for key in keys:
@@ -153,14 +203,24 @@ def finish(handler,db,actor,path,state):
     import nurture
     from app import today
     scoped=getattr(db,'scope_enabled',False)
-    if scoped:
+    old,checked=state
+    if scoped and path=='/api/daily' and isinstance(old,_DailyRecords):
+        import office_scope
+        # /api/daily changes no account fields, so the full-path touched-account
+        # set is empty. Do not rescan unrelated histories or nurture records.
+        new=_daily_snapshot(db,old.ident,old.day)
+        maps=new.maps
+    elif scoped:
         interim=snapshot(db)
         touched={row['id'] for key,row in interim.items() if key.startswith('account:') and state[0].get(key)!=row}
         nurture.sync(db,today(),touched)
         import office_scope
         maps=office_scope.scope_maps(db)
-    else:nurture.sync(db,today())
-    old,checked=state;new=snapshot(db);changed=[key for key in old.keys()|new.keys() if old.get(key)!=new.get(key)]
+        new=snapshot(db)
+    else:
+        nurture.sync(db,today())
+        new=snapshot(db)
+    changed=[key for key in old.keys()|new.keys() if old.get(key)!=new.get(key)]
     group=uuid.uuid4().hex;now=int(time.time())
     for key in changed:
         db.execute('INSERT INTO operations_history(group_id,at,actor_id,actor_name,action,entity,before_json,after_json) VALUES(?,?,?,?,?,?,?,?)',

@@ -446,7 +446,8 @@ class Handler(SimpleHTTPRequestHandler):
                 except ValueError:return self.reply({'error':'资料版本编号不正确'},400)
             return self.reply({'record_versions':found})
         if parsed.path == '/api/daily-flags':
-            day = parse_qs(parsed.query).get('date', [today()])[0]
+            query=parse_qs(parsed.query)
+            day = query.get('date', [today()])[0]
             try:
                 date.fromisoformat(day)
             except ValueError:
@@ -455,29 +456,33 @@ class Handler(SimpleHTTPRequestHandler):
                 begin_read(db)
                 actor=auth.session(db,self.headers.get('Cookie'))
                 if not actor:return self.reply({'error':'请先登录工作台'},401)
+                version_mode=query.get('versions',[''])[0]
+                if version_mode not in ('','1'):return self.reply({'error':'版本读取范围不正确'},400)
+                context=office_scope.read_context(db,actor) if version_mode and getattr(db,'scope_enabled',False) else None
                 rows=db.execute('SELECT a.id, COALESCE(d.published,0) FROM accounts a LEFT JOIN daily d ON d.account_id=a.id AND d.day=?',(day,)).fetchall()
                 if getattr(db,'scope_enabled',False):
-                    allowed=office_scope.visible_ids(db,actor,'accounts')
+                    allowed=context['ids']['accounts'] if context else office_scope.visible_ids(db,actor,'accounts')
                     rows=[row for row in rows if row[0] in allowed]
-            return self.reply({'date':day,'published':{str(row[0]):bool(row[1]) for row in rows}})
+                result={'date':day,'published':{str(row[0]):bool(row[1]) for row in rows}}
+                if version_mode:result['record_versions']=operations.daily_versions(db,day,context)
+            return self.reply(result)
         if parsed.path != '/api/board':
             if parsed.path.startswith('/api/'):return self.reply({'error':'接口不存在'},404)
             return super().do_GET()
-        with connect() as db:
-            actor=auth.session(db,self.headers.get('Cookie'))
-        if not actor:return self.reply({'error':'请先登录工作台'},401)
-        view=parse_qs(parsed.query).get('view',[''])[0]
-        if view not in ('','work','detail'):return self.reply({'error':'读取范围不正确'},400)
-        day = parse_qs(parsed.query).get('date', [today()])[0]
-        try:
-            date.fromisoformat(day)
-        except ValueError:
-            return self.reply({'error':'日期格式不正确'}, 400)
         try:
             with connect() as db:
                 begin_read(db)
                 actor=auth.session(db,self.headers.get('Cookie'))
                 if not actor:return self.reply({'error':'请先登录工作台'},401)
+                view=parse_qs(parsed.query).get('view',[''])[0]
+                if view not in ('','work','detail'):return self.reply({'error':'读取范围不正确'},400)
+                version_scope=parse_qs(parsed.query).get('version_scope',[''])[0]
+                if version_scope not in ('','day'):return self.reply({'error':'版本读取范围不正确'},400)
+                day = parse_qs(parsed.query).get('date', [today()])[0]
+                try:
+                    date.fromisoformat(day)
+                except ValueError:
+                    return self.reply({'error':'日期格式不正确'}, 400)
                 computer_order=integer_order(db,"CASE WHEN id LIKE 'office3:%' THEN substr(id,9) ELSE id END")
                 computers = [dict(r) for r in db.execute("SELECT * FROM computers ORDER BY CASE WHEN id LIKE 'office3:%' THEN 1 ELSE 0 END,"+computer_order+",id")]
                 accounts = [dict(r) for r in db.execute('SELECT a.*,COALESCE(d.published,0) AS published FROM accounts a LEFT JOIN daily d ON d.account_id=a.id AND d.day=? ORDER BY '+integer_order(db,'a.computer_id')+',a.slot', (day,))]
@@ -492,7 +497,7 @@ class Handler(SimpleHTTPRequestHandler):
                     for kind,rows in [('cards',card_info['cards']),('devices',device_info['devices'])]:
                         for row in rows:row['office_ids']=context['maps'][kind].get(row['id'],[])
                 layout_info=publishing_layout.overview(db,context['ids']['accounts'] if context else None,context['ids']['computers'] if context else None)
-                record_versions={} if view else operations.versions(db,context)
+                record_versions={} if view else (operations.versions(db,context,daily_day=day) if version_scope=='day' else operations.versions(db,context))
                 nurture_info=nurture.overview(db,today(),context['ids']['accounts'] if context else None,view!='work')
                 offices=office_scope.list_offices(db,actor) if context else []
                 sync_cursor=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
@@ -592,6 +597,15 @@ class Handler(SimpleHTTPRequestHandler):
         if not db.execute('SELECT 1 FROM accounts WHERE id=?',(ident,)).fetchone():raise ValueError('账号不存在')
         db.execute("UPDATE accounts SET nurture_started=CASE WHEN ?='养号7天' AND status<>'养号7天' THEN '' ELSE nurture_started END,status=? WHERE id=?",(body['status'],body['status'],ident))
         return {'ok':True,'id':ident}
+
+    def _save_daily(self, db, body):
+        day=body['date'];date.fromisoformat(day)
+        if type(body['published']) is not bool:raise ValueError('发布标记应为布尔值')
+        ident=str(body['id'])
+        if not db.execute('SELECT 1 FROM accounts WHERE id=?',(ident,)).fetchone():raise ValueError('账号不存在')
+        db.execute('INSERT INTO daily VALUES(?,?,?) ON CONFLICT(account_id,day) DO UPDATE SET published=excluded.published',
+                   (ident,day,int(body['published'])))
+        return {'ok':True,'daily':{'id':ident,'date':day,'published':body['published']}}
 
     def _idempotent_failure(self, db, actor, body, status, message):
         db.execute('ROLLBACK TO SAVEPOINT idem_business')
@@ -892,14 +906,7 @@ class Handler(SimpleHTTPRequestHandler):
                             return {'ok':True}
                         return self.idempotent_create(db,actor,self.path,body,save_lifecycle)
                     if self.path=='/api/daily':
-                        def save_daily(database,current):
-                            day=body['date']
-                            date.fromisoformat(day)
-                            if type(body['published']) is not bool:raise ValueError('发布标记应为布尔值')
-                            if not database.execute('SELECT 1 FROM accounts WHERE id=?',(str(body['id']),)).fetchone():raise ValueError('账号不存在')
-                            database.execute('INSERT INTO daily VALUES(?,?,?) ON CONFLICT(account_id,day) DO UPDATE SET published=excluded.published',(str(body['id']),day,int(body['published'])))
-                            return {'ok':True}
-                        return self.idempotent_create(db,actor,self.path,body,save_daily)
+                        return self.idempotent_create(db,actor,self.path,body,lambda database,current:self._save_daily(database,body))
                     if self.path=='/api/bulk-status':
                         def save_bulk(database,current):
                             if body['status'] not in STATES or not isinstance(body['ids'],list) or not body['ids']:raise ValueError('请选择账号及状态')
@@ -941,7 +948,7 @@ class Handler(SimpleHTTPRequestHandler):
                 elif self.path=='/api/account/status':
                     self._save_account_status(db,body)
                 elif self.path in ['/api/phone-device','/api/phone-device/create']:
-                    phone_devices.save(db,body,create=self.path.endswith('/create'),actor=actor)
+                    saved_device=phone_devices.save(db,body,create=self.path.endswith('/create'),actor=actor)
                 elif self.path == '/api/account/phone-device':
                     phone_devices.assign(db,body['id'],body.get('phone_device_id'))
                 elif self.path == '/api/account/card-readiness':
@@ -1002,13 +1009,7 @@ class Handler(SimpleHTTPRequestHandler):
                     values=account_lifecycle.validate(db,account_id,{'auxiliary_state':body['auxiliary_state']},old,today(),actor=actor)
                     db.execute('UPDATE accounts SET auxiliary_state=? WHERE id=?',(values[3],account_id))
                 elif self.path == '/api/daily':
-                    day = body['date']; date.fromisoformat(day)
-                    if type(body['published']) is not bool:
-                        raise ValueError('发布标记应为布尔值')
-                    if not db.execute('SELECT 1 FROM accounts WHERE id=?',(str(body['id']),)).fetchone():
-                        raise ValueError('账号不存在')
-                    db.execute('INSERT INTO daily VALUES(?,?,?) ON CONFLICT(account_id,day) DO UPDATE SET published=excluded.published',(str(body['id']),day,int(body['published'])))
-                    saved_daily={'id':str(body['id']),'date':day,'published':body['published']}
+                    saved_daily=self._save_daily(db,body)['daily']
                 elif self.path in ['/api/account', '/api/account/create']:
                     previous_offices=sorted(office_scope.entity_offices(db,'accounts',str(body['id']))) if self.path=='/api/account' and getattr(db,'scope_enabled',False) else None
                     saved_account=account_service.save(db,body,actor,today(),create=self.path.endswith('/create'))
@@ -1025,6 +1026,7 @@ class Handler(SimpleHTTPRequestHandler):
                 result={'ok':True}
                 if self.path=='/api/account':result['account']=account_service.board_account(db,saved_account,today())
                 elif self.path=='/api/daily':result['daily']=saved_daily
+                elif self.path in ['/api/phone-device','/api/phone-device/create']:result['id']=saved_device
                 auth.audit(db,actor,self.path,body.get('id',','.join(map(str,body.get('ids',[])))[:200]))
             self.reply(result)
         except AdmissionRejected as e:

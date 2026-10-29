@@ -17,13 +17,18 @@ function accountOffice(account){
  return number>=301&&number<=700?'two':'one';
 }
 function officeAccounts(accounts=data.accounts){return accounts.filter(a=>activeOffice==='all'||accountOffice(a)===activeOffice);}
+function deviceInOffice(device,office=activeOffice){
+ if(office==='all')return true;
+ if(data.user?.scope_mode)return Array.isArray(device.office_ids)&&(office==='pending'?device.office_ids.length===0:device.office_ids.includes(office));
+ return accountOffice({phone_device_id:device.id})===office;
+}
 function officeFilterResources(resources,kind){
  if(activeOffice==='all')return resources;
+ if(kind==='devices')return resources.filter(resource=>deviceInOffice(resource));
  const accounts=kind==='computers'?officeAccounts():[];
  return resources.filter(resource=>{
   if(kind==='computers'&&resource.id==='unassigned')return accounts.some(a=>a.computer_id==='unassigned');
   if(data.user?.scope_mode)return Array.isArray(resource.office_ids)&&(activeOffice==='pending'?resource.office_ids.length===0:resource.office_ids.includes(activeOffice));
-  if(kind==='devices')return accountOffice({phone_device_id:resource.id})===activeOffice;
   return accounts.some(a=>a.computer_id===resource.id)||(data.publishing_layout?.cells||[]).some(cell=>cell.computer_id===resource.id&&publishingCellOffice(cell)===activeOffice);
  });
 }
@@ -37,9 +42,9 @@ function renderOffices(){
  const scoped=!!data.user?.scope_mode;
  officeDefinitions=scoped?[{id:'all',name:'全部授权办公室',range:'当前账号可访问的资料'},...(data.offices||[]).map(o=>({id:o.id,name:o.name,range:'明确分配的资料'})),...(data.user.scope_mode==='all'?[{id:'pending',name:'待分配',range:'尚未分配办公室'}]:[])]:legacyOfficeDefinitions;
  if(!officeDefinitions.some(o=>o.id===activeOffice))activeOffice='all';
- $('officeWorkspace').hidden=page!=='accounts'&&page!=='board';
+ $('officeWorkspace').hidden=!['accounts','board','phones'].includes(page);
  if($('officeWorkspace').hidden)return;
- $('officeTabs').innerHTML=officeDefinitions.map(o=>`<button type="button" data-office="${esc(o.id)}" aria-pressed="${activeOffice===o.id}" class="office-tab ${activeOffice===o.id?'active':''}"><strong>${esc(o.name)}<span>${data.accounts.filter(a=>o.id==='all'||accountOffice(a)===o.id).length}</span></strong><small>${esc(o.range)}</small></button>`).join('');
+ $('officeTabs').innerHTML=officeDefinitions.map(o=>`<button type="button" data-office="${esc(o.id)}" aria-pressed="${activeOffice===o.id}" class="office-tab ${activeOffice===o.id?'active':''}"><strong>${esc(o.name)}<span>${page==='phones'?(data.phone_devices?.devices||[]).filter(device=>deviceInOffice(device,o.id)).length:data.accounts.filter(a=>o.id==='all'||accountOffice(a)===o.id).length}</span></strong><small>${page==='phones'?'手机设备数量':esc(o.range)}</small></button>`).join('');
  $('officeHint').textContent=scoped?'按资料明确分配的办公室筛选；调整登录手机不会改变办公室归属。':'办公室一、二按原手机编号划分；办公室三设备独立编号。账号管理与发布看板同步切换，未分配电脑的账号可在账号管理查看。';
 }
 document.addEventListener('click',event=>{
@@ -47,6 +52,7 @@ document.addEventListener('click',event=>{
  if(!button)return;
  activeOffice=button.dataset.office;
  activeLifecyclePreset='';
+ if(page==='phones'){devicePageIndex=1;if(typeof batchSelection==='function')batchSelection('devices').clear();}
  clearAccountSearch();['query','computer','status','published','accountType','lifecycleFilter','ageFilter','loginPhoneFilter'].forEach(id=>$(id).value='');
  selected.clear();render();
 });

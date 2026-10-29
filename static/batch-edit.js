@@ -6,7 +6,7 @@ function batchVisible(kind){
  if(kind==='cards')return filteredCards();if(kind==='devices')return filteredPhones();if(kind==='verification')return batchNurtureRows;
  return filtered().filter(a=>kind!=='daily'||a.computer_id!=='unassigned');
 }
-function batchCurrentPage(kind){const rows=batchVisible(kind);return kind==='cards'?rows.slice((cardPageIndex-1)*cardPageSize,cardPageIndex*cardPageSize):kind==='devices'?rows.slice((devicePageIndex-1)*devicePageSize,devicePageIndex*devicePageSize):rows;}
+function batchCurrentPage(kind){const rows=batchVisible(kind);return kind==='accounts'&&typeof accountPageRows==='function'?accountPageRows(rows):kind==='cards'?rows.slice((cardPageIndex-1)*cardPageSize,cardPageIndex*cardPageSize):kind==='devices'?rows.slice((devicePageIndex-1)*devicePageSize,devicePageIndex*devicePageSize):rows;}
 function batchBar(kind){
  const selection=batchSelection(kind),visible=batchVisible(kind),ids=new Set(visible.map(r=>String(r.id)));for(const id of selection)if(!ids.has(id))selection.delete(id);
  const title={accounts:'账号',cards:'手机卡',devices:'手机设备',daily:'发布账号',verification:'养号账号'}[kind];

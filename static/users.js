@@ -77,13 +77,16 @@ byId('officeForm').onsubmit=async event=>{
 };
 function editEntityScope(){
  const row=scopeRows.find(row=>String(row.id)===byId('scopeEntity').value);if(!row)return;
- byId('scopeOffices').innerHTML=`<option value="__pending__" ${row.office_ids.length?'':'selected'}>待核对，暂不分配</option>`+offices.map(office=>`<option value="${safe(office.id)}" ${row.office_ids.includes(office.id)?'selected':''}>${safe(office.name)}</option>`).join('');
+ const device=byId('scopeKind').value==='devices',unresolved=device&&row.office_ids.length!==1;
+ byId('scopeOffices').multiple=!device;
+ byId('scopeOffices').innerHTML=(device?`<option value="" ${unresolved?'selected':''}>请核对实物后选择唯一办公室</option>`:`<option value="__pending__" ${row.office_ids.length?'':'selected'}>待核对，暂不分配</option>`)+offices.map(office=>`<option value="${safe(office.id)}" ${!unresolved&&row.office_ids.includes(office.id)?'selected':''}>${safe(office.name)}</option>`).join('');
+ if(unresolved)byId('scopeMessage').textContent='旧手机归属待核对；不会自动选择或拆分设备，请核对实物后指定唯一办公室。';
 }
 async function loadEntityScopes(after=''){
  scopeAfter=after;byId('scopeMessage').textContent='读取中…';
  const result=await request('/api/auth/entity-scopes?kind='+encodeURIComponent(byId('scopeKind').value)+'&after='+encodeURIComponent(after));
  scopeRows=result.entities;scopeNext=result.next_after;byId('scopeNext').disabled=!scopeNext;byId('scopeForm').hidden=!scopeRows.length;
- byId('scopeEntity').innerHTML=scopeRows.map(row=>`<option value="${safe(row.id)}">${safe(row.id)} · ${safe(row.name)}</option>`).join('');editEntityScope();byId('scopeMessage').textContent=scopeRows.length?'已读取，请核对归属后保存。':'没有资料。';
+ byId('scopeEntity').innerHTML=scopeRows.map(row=>`<option value="${safe(row.id)}">${safe(row.id)} · ${safe(row.name)}</option>`).join('');byId('scopeMessage').textContent=scopeRows.length?'已读取，请核对归属后保存。':'没有资料。';editEntityScope();
 }
 byId('scopeLoad').onclick=()=>loadEntityScopes().catch(error=>byId('scopeMessage').textContent=error.message);
 byId('scopeNext').onclick=()=>loadEntityScopes(scopeNext).catch(error=>byId('scopeMessage').textContent=error.message);
@@ -93,9 +96,10 @@ byId('scopeForm').onsubmit=async event=>{
  event.preventDefault();const button=event.submitter;button.disabled=true;
  try{
   const row=scopeRows.find(row=>String(row.id)===byId('scopeEntity').value);if(!row)throw Error('请先读取资料');
-  const selected=[...byId('scopeOffices').selectedOptions].map(option=>option.value);
+  const selected=[...byId('scopeOffices').selectedOptions].map(option=>option.value).filter(Boolean);
   if(!selected.length||selected.includes('__pending__')&&selected.length>1)throw Error('请选择办公室，或单独选择待核对');
   const officeIds=selected.filter(id=>id!=='__pending__');
+  if(byId('scopeKind').value==='devices'&&officeIds.length!==1)throw Error('每台手机必须明确选择一个办公室');
   const requestKey='entity-scope:'+byId('scopeKind').value+':'+row.id+':'+row.scope_version+':'+[...officeIds].sort().join(',');
   await confirmRequest('/api/auth/entity-scope',{kind:byId('scopeKind').value,id:row.id,expected_scope:row.scope_version,office_ids:officeIds,request_id:claimRequestId(requestKey)},requestKey);
   await loadEntityScopes(scopeAfter);byId('scopeMessage').textContent='归属已保存；相关人员刷新后按新范围访问。';

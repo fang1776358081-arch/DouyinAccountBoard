@@ -17,7 +17,7 @@ import operations
 FIELDS={
  'accounts':{'内部编号':'id','昵称':'name','抖音号':'douyin_id','注册手机号':'registration_phone','账号状态':'status','账号类型':'account_type','关联大号编号':'parent_account_id','注册日期':'registered_on','小号注册状态':'auxiliary_state','稳定状态':'card_stability','改密状态':'password_state','养号开始日期':'nurture_started','备注':'note'},
  'cards':{'内部编号':'id','手机卡号码':'phone','卡名称':'label','卡主':'owner','运营商':'carrier','卡状态':'status','卡位置':'location','卡归属':'ownership','负责人':'keeper','接码联系人':'code_contact','接码状态':'code_state','接码事项':'code_note','归还状态':'return_state','预计归还日期':'return_due','实际归还日期':'returned_on','到期日期':'expires_on','备注':'note'},
- 'devices':{'手机序号':'id','手机名称':'name','安排状态':'state','负责人':'owner','设备位置':'location','备注':'note'}}
+ 'devices':{'内部编号':'id','手机序号':'number','手机名称':'name','安排状态':'state','负责人':'owner','设备位置':'location','备注':'note'}}
 TABLES={'accounts':'accounts','cards':'phone_cards','devices':'phone_devices'}
 
 
@@ -80,7 +80,7 @@ def table_rows(db,kind,ids=None,template=False,day='',actor=None):
                     if row['parent_account_id'] not in context['ids']['accounts']:row['parent_account_id']=None
                     if row['phone_device_id'] not in context['ids']['devices']:row['phone_device_id']=None
                     if row['computer_id'] not in context['ids']['computers']:row['computer_id']=None
-                value=[str(row[key] or '') for key in FIELDS[kind].values()]
+                value=[str((phone_devices.number_from_id(row['id']) if kind=='devices' and key=='number' else row[key]) or '') for key in FIELDS[kind].values()]
                 if kind=='accounts':
                     computer=db.execute('SELECT name FROM computers WHERE id=?',(row['computer_id'],)).fetchone()
                     positions=db.execute('SELECT c.name,p.slot,p.source_cell,p.computer_id FROM publishing_layout p JOIN computers c ON c.id=p.computer_id WHERE p.account_id=? AND p.batch=(SELECT batch FROM publishing_layout_state WHERE id=1)',(row['id'],)).fetchall()
@@ -108,6 +108,62 @@ def save(db,kind,payload,actor,day,create):
         auth.authorize_route(db,actor,'/api/phone-card',payload);phone_cards.save(db,payload,actor=actor)
     else:
         auth.authorize_route(db,actor,'/api/phone-device/create' if create else '/api/phone-device',payload);phone_devices.save(db,payload,create=create,actor=actor)
+
+
+def _device_import(db,actor,values,new_scope):
+    """Resolve visible numbers only inside an explicitly selected office.
+
+    A stored internal ID is never reconstructed from a display number. Legacy
+    unscoped templates retain their historical bare/office3 identifiers.
+    """
+    scoped=getattr(db,'scope_enabled',False)
+    ident=values.get('id','')
+    raw_number=values.get('number','')
+    if raw_number and (scoped and not re.fullmatch(r'[0-9]{1,6}',raw_number)):
+        raise ValueError('手机序号请填写1至6位正整数；内部编号请放在单独一列')
+    number=phone_devices.number_from_id(raw_number) if raw_number else None
+    if raw_number and not number:raise ValueError('手机序号格式错误')
+    if ident:
+        old=db.execute('SELECT * FROM phone_devices WHERE id=?',(ident,)).fetchone()
+        if not old:raise ValueError('内部编号不存在；新增手机请留空内部编号并填写手机序号')
+        actual_number=phone_devices.number_from_id(ident)
+        if not actual_number or number and actual_number!=number:raise ValueError('内部编号与手机序号不一致')
+        number=actual_number
+        if scoped:
+            import office_scope
+            office_scope.require_entity(db,actor,'devices',ident,write=True)
+            offices=office_scope.entity_offices(db,'devices',ident)
+            if len(offices)!=1:raise ValueError('已有手机未明确且仅归属一个办公室，请先核对归属')
+            office=next(iter(offices))
+            matches=phone_devices.office_number_devices(db,office,number)
+            if len(matches)!=1 or matches[0]['id']!=ident:raise ValueError('该办公室的手机序号存在多条资料，请先核对')
+            identity='device-office:'+office+':'+number
+        else:identity='device:'+ident
+    elif scoped:
+        import office_scope
+        if not number:raise ValueError('需填写内部编号或手机序号')
+        offices=office_scope.requested_offices(db,actor,'devices',new_scope or {})
+        if len(offices)!=1:raise ValueError('按手机序号导入必须明确选择一个办公室')
+        office=offices[0]
+        matches=phone_devices.office_number_devices(db,office,number)
+        if len(matches)>1:raise ValueError('该办公室的手机序号存在多条资料，请先核对')
+        old=matches[0] if matches else None
+        if old:
+            office_scope.require_entity(db,actor,'devices',old['id'],write=True)
+            if office_scope.entity_offices(db,'devices',old['id'])!={office}:raise ValueError('已有手机属于多个办公室，请先核对归属')
+            ident=old['id']
+        identity='device-office:'+office+':'+number
+    else:
+        if not number:raise ValueError('需填写内部编号或手机序号')
+        if not re.fullmatch(r'(?:office3:)?[0-9]{1,6}',raw_number):raise ValueError('手机序号格式错误；旧版三办使用office3:序号')
+        ident=('office3:' if raw_number.startswith('office3:') else '')+number
+        old=db.execute('SELECT * FROM phone_devices WHERE id=?',(ident,)).fetchone()
+        identity='device:'+ident
+    normalized={**values,'number':number}
+    payload={**dict(old),**normalized} if old else normalized.copy()
+    if ident:payload['id']=ident
+    if old and old['state_source']=='auto' and ('state' not in values or values['state']==old['state']):payload['state']='auto'
+    return old,identity,payload,normalized
 
 
 def plan_import(db,actor,kind,rows,day,new_scope=None):
@@ -145,11 +201,7 @@ def plan_import(db,actor,kind,rows,day,new_scope=None):
                 identity='phone:'+values['phone'];payload={**dict(old),**values} if old else values.copy()
                 payload['id']=old['id'] if old else None
             else:
-                ident=values.get('id','')
-                if not re.fullmatch(r'(?:office3:)?[1-9]\d{0,5}',ident):raise ValueError('手机序号格式错误；三办使用office3:序号')
-                old=db.execute('SELECT * FROM phone_devices WHERE id=?',(ident,)).fetchone()
-                identity='device:'+ident;payload={**dict(old),**values} if old else values.copy()
-                if old and old['state_source']=='auto' and ('state' not in values or values['state']==old['state']):payload['state']='auto'
+                old,identity,payload,values=_device_import(db,actor,values,new_scope)
             if getattr(db,'scope_enabled',False):
                 import office_scope
                 if old:office_scope.require_entity(db,actor,kind,old['id'],write=True)
@@ -161,7 +213,7 @@ def plan_import(db,actor,kind,rows,day,new_scope=None):
                 raise ValueError('同一文件重复记录，请合并后重试')
             seen[identity]=len(plans)
             item.update(identity=identity,entity=operations.row_key(table,dict(old)) if old else '',expected=operations.token(current[operations.row_key(table,dict(old))]) if old else None,payload=payload,create=not bool(old),
-                        action='update' if old else 'create',changes=[dict(field=key,before=old[key] if old and key in old.keys() else '',after=value) for key,value in values.items() if key!='id' and (not old or str(old[key] or '')!=value)])
+                        action='update' if old else 'create',changes=[dict(field=key,before=(phone_devices.number_from_id(old['id']) if kind=='devices' and key=='number' else old[key]) if old else '',after=value) for key,value in values.items() if key!='id' and (not old or str((phone_devices.number_from_id(old['id']) if kind=='devices' and key=='number' else old[key]) or '')!=value)])
             if old and not item['changes']:item['action']='same'
             # Reuse the production validators in a rollback-only savepoint.
             db.execute('SAVEPOINT import_validation')

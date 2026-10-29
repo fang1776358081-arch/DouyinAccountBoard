@@ -104,6 +104,10 @@ def assign_entity(db, actor, kind, ident, office_ids, *, newly_created=False):
         grants = granted_offices(db, actor)
         if not wanted or not wanted <= grants or (not newly_created and (not current or not current <= grants)):
             raise auth.AccessError('无权修改资料的原办公室或目标办公室', 403)
+    if kind=='devices':
+        import phone_devices
+        phone_devices.validate_device_scope(db,ident,sorted(wanted),newly_created=newly_created)
+        if not newly_created and current==wanted:return sorted(current)
     db.execute('DELETE FROM ' + mapping + ' WHERE ' + key + '=?', (ident,))
     for office_id in sorted(wanted):
         db.execute('INSERT INTO ' + mapping + '(' + key + ',office_id) VALUES(?,?)', (ident, office_id))

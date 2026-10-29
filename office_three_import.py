@@ -192,6 +192,27 @@ def _plan(db, account_rows, progress_rows, day):
     source_computers = {}
     computer_available = {}
     device_available = {}
+    device_identities = {}
+
+    def device_identity(number, row):
+        if number in device_identities:
+            return device_identities[number]
+        matches = phone_devices.office_number_devices(db, OFFICE_ID, number)
+        ident = 'office3:' + number
+        if len(matches) > 1 or matches and office_scope.entity_offices(db, 'devices', matches[0]['id']) != {OFFICE_ID}:
+            items.append(_item('device', row, 'conflict', '手机' + number,
+                               '同一手机序号有多条资料或并非仅属于办公室三；保留原资料'))
+            ident = None
+        elif matches:
+            ident = matches[0]['id']
+        elif db.execute('SELECT 1 FROM phone_devices WHERE id=?', (ident,)).fetchone():
+            # Do not clone a historical source device whose ownership is still
+            # pending or belongs elsewhere, even though its number is free here.
+            items.append(_item('device', row, 'conflict', ident,
+                               '原来源编号已存在，但并非明确且仅属于办公室三；保留原资料'))
+            ident = None
+        device_identities[number] = ident
+        return ident
 
     def asset(kind, ident, row, values):
         cache = computer_available if kind == 'computers' else device_available
@@ -248,7 +269,8 @@ def _plan(db, account_rows, progress_rows, day):
         pair_device = device if not re.search(r'多开|小号', row['登录手机序号']) else None
         if old:
             candidate = dict(row=number, account_id=old[0]['id'], handle=handle, name=row['昵称'], device=pair_device,
-                             old_device=old[0]['phone_device_id'], reused=True)
+                             old_device=old[0]['phone_device_id'],
+                             source_device=device_identity(pair_device, number) if pair_device else None, reused=True)
             candidates.append(candidate)
             items.append(_item('account', number, 'reuse', label, '仅复用真实抖音号对应的办公室三账号，原字段全部保留'))
             continue
@@ -273,8 +295,8 @@ def _plan(db, account_rows, progress_rows, day):
         if next_slot > 100:
             items.append(_item('account', number, 'conflict', label, '登记电脑账号位置超过100，需先核对安排'))
             continue
-        device_id = 'office3:' + device
-        if not asset('devices', device_id, number, dict(name='办公室三 · ' + device + '号手机')):
+        device_id = device_identity(device, number)
+        if not device_id or not asset('devices', device_id, number, dict(name='办公室三 · ' + device + '号手机')):
             items.append(_item('account', number, 'conflict', label, '手机编号存在归属冲突'))
             continue
         registered = ''
@@ -332,7 +354,7 @@ def _plan(db, account_rows, progress_rows, day):
             if not reason and not candidate:
                 reason = '不能按真实抖音号或手机编号与昵称唯一匹配，保留待核对'
             if not reason and candidate['reused'] and (
-                    not candidate['device'] or candidate['old_device'] != 'office3:' + candidate['device']):
+                    not candidate['source_device'] or candidate['old_device'] != candidate['source_device']):
                 reason = '已有账号的登记手机与来源不同或不明确，保留旧资料且不猜测新位置'
             if not reason and candidate['reused'] and office_scope.entity_offices(db, 'devices', candidate['old_device']) != {OFFICE_ID}:
                 reason = '已有账号手机未明确且仅归属办公室三，保留待核对'
@@ -370,17 +392,48 @@ def _plan(db, account_rows, progress_rows, day):
     return plan, summary, items, warnings
 
 
+def _missing_nickname_suggestions(db, account_rows):
+    """Read-only evidence, never an update plan or a phone/name identity guess."""
+    existing = defaultdict(list)
+    for raw in db.execute('SELECT id,name,douyin_id FROM accounts'):
+        existing[raw['douyin_id']].append(dict(raw))
+    counts = Counter(row['抖音号'] for row in account_rows if row['抖音号'])
+    suggestions = []
+    for row in account_rows:
+        handle, source_name = row['抖音号'], row['昵称']
+        if (not re.fullmatch(r'[A-Za-z0-9_.-]{2,100}', handle) or counts[handle] != 1
+                or not source_name or len(source_name) > 100 or source_name.startswith('昵称待补充')):
+            continue
+        matches = existing.get(handle, [])
+        if len(matches) != 1:
+            continue
+        old = matches[0]
+        if office_scope.entity_offices(db, 'accounts', old['id']) != {OFFICE_ID}:
+            continue
+        # Only the exact generated placeholder formats are considered missing.
+        # A real nickname beginning with those words must remain untouched.
+        current_name = old['name'] if old['name'] is not None else ''
+        if current_name != '' and not re.fullmatch(r'昵称待补充(?:（手机[1-9][0-9]{0,5}）)?', current_name):
+            continue
+        suggestions.append(dict(row=row['来源行'], account_id=old['id'], douyin_id=handle,
+                                current_name=current_name, source_name=source_name))
+    return suggestions
+
+
 def preview(db, actor, body, day):
     actor = _require(db, actor, body)
     account_rows, progress_rows = _read_sources(body)
     before = _snapshot(db)
     plan, summary, items, warnings = _plan(db, account_rows, progress_rows, day)
     scope_candidates = _scope_candidates(db, progress_rows)
+    nickname_suggestions = _missing_nickname_suggestions(db, account_rows)
     payload = dict(office_id=OFFICE_ID, guard=operations.token(before), plan=plan, summary=summary,
                    scope_candidates=scope_candidates)
     preview_id = operations.preview(db, actor, KIND, payload)
     return dict(preview_id=preview_id, office_id=OFFICE_ID, summary=summary, rows=items,
-                warnings=warnings, confirmation=CONFIRMATION, scope_candidates=scope_candidates)
+                warnings=warnings, confirmation=CONFIRMATION, scope_candidates=scope_candidates,
+                missing_nickname_suggestions=nickname_suggestions,
+                missing_nickname_suggestion_count=len(nickname_suggestions))
 
 
 def _verify_computer_scopes(db, before, requested):

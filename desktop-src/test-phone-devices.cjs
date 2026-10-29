@@ -3,10 +3,14 @@ const fs=require('node:fs');
 const path=require('node:path');
 const vm=require('node:vm');
 const inputs={deviceQuery:{value:'76'},deviceStateFilter:{value:''},deviceOccupancyFilter:{value:''}};
-const context={document:{addEventListener(){}},$(id){return inputs[id]??=( {value:''} );},data:{phone_devices:{devices:[{id:'2',state:'在用'},{id:'76',state:'在用'}]},accounts:[{id:'112',phone_device_id:'2',douyin_id:'99976999999',name:'其他账号'},{id:'1153',phone_device_id:'76',name:'笑笑道路救援'}]}};
+const context={URLSearchParams,location:{search:''},document:{addEventListener(){}},$(id){return inputs[id]??=( {value:''} );},data:{phone_devices:{devices:[{id:'2',state:'在用'},{id:'76',state:'在用'}]},accounts:[{id:'112',phone_device_id:'2',douyin_id:'99976999999',name:'其他账号'},{id:'1153',phone_device_id:'76',name:'笑笑道路救援'}]}};
 vm.createContext(context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/field-search.js'),'utf8'),context);
+vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/offices.js'),'utf8'),context);
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/phone-devices.js'),'utf8'),context);
+// Independent number search covers all offices; real office filtering is also
+// exercised below instead of replacing its new helper with an always-true mock.
+vm.runInContext('activeOffice="all"',context);
 assert.deepEqual(Array.from(context.filteredPhones(),d=>d.id),['76']);
 inputs.deviceQuery.value='#1153';
 assert.equal(context.filteredPhones().length,0);
@@ -19,6 +23,9 @@ assert.equal(context.filteredPhones().length,0);
 context.data.phone_devices.devices.push({id:'office3:76',name:'办公室三 · 76号手机',state:'在用'});
 inputs.deviceQuery.value='76';inputs.deviceStateFilter.value='';
 assert.deepEqual(Array.from(context.filteredPhones(),d=>d.id),['76','office3:76']);
+vm.runInContext('activeOffice="three"',context);
+assert.deepEqual(Array.from(context.filteredPhones(),d=>d.id),['office3:76']);
+vm.runInContext('activeOffice="all"',context);
 assert.equal(context.emptyPhoneText({state:'可用闲置'}),'无当前登录账号，已人工确认可用闲置');
 assert.match(context.emptyPhoneText({state:'待确认'}),/未认定为空闲/);
 console.log('手机设备：手机序号、账号编号和抖音号按独立字段匹配，重号与闲置筛选通过');

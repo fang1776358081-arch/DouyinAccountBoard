@@ -233,7 +233,7 @@ def authorize(db, actor, body):
 def version_keys(db, body):
     refs = _refs(db, {key: value for key, value in body.items() if key != 'device_id'} if body.get('action') == 'reassign_unit' else body)
     keys = {'device:' + value for value in refs['devices']}
-    if body.get('action') == 'reassign_unit' and body.get('device_id'):
+    if body.get('action') == 'reassign_unit' and body.get('device_id') and not getattr(db,'scope_enabled',False):
         keys.add('device:' + str(body['device_id']))
     keys.update('unit:' + value for value in refs['units'])
     keys.update('case:' + value for value in refs['cases'])
@@ -518,18 +518,24 @@ def _reassign_unit(db, actor, body):
         raise ValueError('只可为被新机补号后的旧实物重新编号')
     if unit['status'] not in {'返修待验', '故障', '待确认'} or body.get('confirmed_usable') is not True:
         raise ValueError('请先核对旧机返修情况，并确认实际复检可用后重新编号')
-    device_id = phone_devices.device_identity(body.get('device_id', ''))
-    if db.execute('SELECT 1 FROM phone_devices WHERE id=?', (device_id,)).fetchone():
-        raise ValueError('新编号已经存在，请选择一个尚未登记的编号')
     occupied = (db.execute('SELECT 1 FROM phone_card_placements WHERE unit_id=?', (unit['id'],)).fetchone()
                 or db.execute('SELECT 1 FROM phone_account_access WHERE last_unit_id=?', (unit['id'],)).fetchone())
     state = '在用' if occupied else '可用闲置'
-    name = _text(body, 'name', limit=100) or ('办公室三 · ' + device_id.split(':')[-1] + '号手机' if device_id.startswith('office3:') else device_id + '号手机')
-    db.execute("INSERT INTO phone_devices(id,name,state,state_source) VALUES(?,?,?,'manual')", (device_id, name, state))
     if getattr(db, 'scope_enabled', False):
         import office_scope
         scopes = sorted(office_scope.entity_offices(db, 'devices', unit['device_id']))
-        office_scope.assign_entity(db, actor, 'devices', device_id, scopes, newly_created=True)
+        if len(scopes)!=1:
+            raise ValueError('原实物的办公室归属待核对，请先明确唯一办公室再重新编号')
+        # Only the number is supplied. The office is inherited from an explicit
+        # source mapping and the stable internal identity is generated here.
+        if 'number' not in body:raise ValueError('返修重新编号请填写手机序号')
+        payload=dict(number=body['number'],office_ids=scopes,state=state,name=_text(body,'name',limit=100))
+    else:
+        device_id=phone_devices.device_identity(body.get('device_id',''))
+        payload=dict(id=device_id,state=state,name=_text(body,'name',limit=100))
+    # Reuse create validation without manufacturing an additional physical
+    # phone: the same old unit will become the new number's current identity.
+    device_id=phone_devices.save(db,payload,create=True,actor=actor,initialize_unit=False)
     db.execute('UPDATE phone_units SET device_id=?,generation=1,active=1,status=?,revision=revision+1 WHERE id=?',
                (device_id, state, unit['id']))
     # Accounts still refer to this physical identity, so their legacy number follows it.
@@ -617,7 +623,8 @@ def overview(db, accounts, devices, cards, actor=None):
         unit['device_name'] = by_device[unit['device_id']]['name']
         unit['label'] = unit['device_name'] + ' · 第' + str(unit['generation']) + '台' + ('（旧机）' if not unit['active'] else '')
         if unit['original_device_id'] != unit['device_id']:
-            unit['label'] += '（原' + unit['original_device_id'] + '号）'
+            import phone_devices
+            unit['label'] += '（原' + (phone_devices.number_from_id(unit['original_device_id']) or '待核对') + '号）'
     placements = []
     for row in db.execute('SELECT * FROM phone_card_placements ORDER BY card_id'):
         if row['card_id'] not in card_ids:
@@ -683,11 +690,20 @@ def overview(db, accounts, devices, cards, actor=None):
             account['phone_device_name'] = account['device_access']['last_unit_label']
     for card in cards:
         card['placement'] = placement_map.get(card['id'])
+    current_by_device,history_by_device,accounts_by_unit = {},{},{}
+    for unit in units:
+        if unit['active']:current_by_device.setdefault(unit['device_id'],unit)
+        history_by_device.setdefault(unit['device_id'],[]).append(unit)
+        if unit['original_device_id'] != unit['device_id']:
+            history_by_device.setdefault(unit['original_device_id'],[]).append(unit)
+    for account in accounts:
+        last_unit_id=(account.get('device_access') or {}).get('last_unit_id')
+        accounts_by_unit.setdefault(last_unit_id,[]).append(account)
     for device in devices:
-        device['current_unit'] = next((row for row in units if row['device_id'] == device['id'] and row['active']), None)
-        device['unit_history'] = [row for row in units if row['device_id'] == device['id'] or row['original_device_id'] == device['id']]
+        device['current_unit'] = current_by_device.get(device['id'])
+        device['unit_history'] = history_by_device.get(device['id'],[])
         current = device['current_unit']
-        own = [row for row in accounts if (row.get('device_access') or {}).get('last_unit_id') == (current['id'] if current else '')]
+        own = accounts_by_unit.get(current['id'] if current else '',[])
         inactive = sum(row['status'] in {'封禁', '停用'} for row in own)
         device.update(account_ids=[row['id'] for row in own], account_count=len(own), inactive_count=inactive,
                       occupancy='无当前账号' if not own else '仅封禁或停用' if inactive == len(own) else '有在用或待确认账号')
