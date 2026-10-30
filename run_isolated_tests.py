@@ -15,7 +15,7 @@ def main():
     parser.add_argument('modules', nargs='+')
     args = parser.parse_args()
     # No discovery: historical tests may use customer-derived fixtures.
-    allowed = {'test_release_isolation', 'test_release_shared', 'test_release_package', 'test_release_collection', 'test_release_core', 'test_release_backup', 'test_device_workflow', 'test_workspace_summary', 'test_auth_username', 'test_office_three_import', 'test_device_office_numbers', 'test_device_office_imports', 'test_daily_publish', 'test_office_three_nickname_preview', 'test_performance_backend', 'test_performance_http'}
+    allowed = {'test_release_isolation', 'test_release_shared', 'test_release_package', 'test_release_collection', 'test_release_core', 'test_release_backup', 'test_device_workflow', 'test_workspace_summary', 'test_auth_username', 'test_office_three_import', 'test_device_office_numbers', 'test_device_office_imports', 'test_daily_publish', 'test_office_three_nickname_preview', 'test_performance_backend', 'test_performance_http', 'test_publish_first_screen_backend', 'test_publish_first_screen_http'}
     if not set(args.modules) <= allowed:
         parser.error('Test module has not been reviewed for synthetic execution')
     root = create_root(args.root)

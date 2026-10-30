@@ -40,6 +40,16 @@
 - 新网页按所选日期读取发布版本信息，切日期时同步获取该日的发布状态与版本。只减少无关日期的技术版本元数据，不删除历史发布记录；旧接口默认完整读取保持兼容。
 - 性能对照使用项目内合成数据，报告必须区分本地SQLite/浏览器渲染与真实PostgreSQL、网络、生产环境。未经实际测量，不以单用户卡顿或低CPU直接建议升级服务器。
 
+每日发布首屏读取仍保留完整兼容字段，不因只显示一台电脑就缩小业务范围：
+
+- 冷缓存直接请求已自带身份校验的 `/api/board?version_scope=day`，不先串行请求 `/api/auth/me`。有缓存时仍先核对当前登录人员，再显示同一人员的缓存；登录失效清除缓存。
+- 办公室和资料版本只在同一读取事务内复用已核实的范围映射，不跨请求缓存权限，也不改变写操作的重新授权或并发校验。
+- “待匹配分类处理”折叠时只更新数量，展开后才计算完整候选；原分类、独立筛选、分页和关联权限保持。发布矩阵本身未重写。
+- 可在受控诊断时设置 `DOUYIN_BOARD_TIMING=1`，为 board 和 auth/me 增加 `Server-Timing`，并向 `douyin_board.performance` logger 写固定阶段名及毫秒数；默认不输出。不会记录请求参数、SQL、账号、Cookie、令牌或连接串。
+- `/api/health` 与 `/api/ready` 的 `X-Board-Build` 响应头标记正在处理请求的后端发布版本；当前为 `publish-firstscreen-20261030-r1`。它不改变原JSON、就绪条件或权限，也不读取请求参数/环境秘密或逐请求调用Git。发布收据须另绑定提交号和源码哈希，不能用该标记反推出旧版本。
+- 计时头截至编码/发头前，不包含正文发送；日志额外有 `response_write`。它是服务器写入缓冲区耗时，不等于客户端传输时间。错误在事务内提前回复时，其计时不含随后连接退出；HTTP准入排队、真实PG连接内的TLS/槽位细分、浏览器布局和绘制须另测。
+- 本次对照新增 `test_publish_first_screen_backend`、`test_publish_first_screen_http`、`test_publish_first_screen_frontend.cjs` 及 `benchmark_publish_first_screen.cjs`。前端基准是实际JS在合成DOM/Fetch中的CPU下界，不能当作真实浏览器或线上秒数；响应体仍包含全量授权资料，专用 `view=publish` 和懒加载尚未实施。
+
 ## 自动同步日志
 
 服务器同步脚本的可维护源码在 `ops/douyin_board_sync.py`，安装后由原来的 `douyin-board-sync.service` 和约每2分钟一次的定时器调用。同步器本身需按服务器维护流程单独安装；仅推送网站代码不会自动替换同步器。安装不依靠网站进程执行，也不改数据库。

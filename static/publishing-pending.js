@@ -18,6 +18,8 @@ function pendingReviewRows(){
 }
 function renderPendingReview(){
  if(!data||!$('pendingReviewToggle'))return;
+ $('pendingReviewToggle').textContent=`待匹配分类处理（${(data.publishing_layout?.cells||[]).filter(cell=>cell.label?.trim()&&!cell.account_id).length}）`;
+ if($('pendingReviewPanel')?.hidden)return;
  const all=pendingReviewRows(),office=$('pendingReviewOffice').value||'all';
  const scope=all.filter(row=>office==='all'||row.cell.office===office),reason=$('pendingReviewReason').value||'all';
  $('pendingReviewToggle').textContent=`待匹配分类处理（${all.length}）`;

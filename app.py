@@ -13,6 +13,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import board_updates
+import board_performance
 import heavy_work
 import collection
 import account_lifecycle
@@ -279,14 +280,23 @@ class Handler(SimpleHTTPRequestHandler):
 
     def reply(self, value, status=200, headers=None):
         if isinstance(value,dict) and hasattr(self,'_version_delta'):value={**value,'_record_versions':self._version_delta}
-        payload = json.dumps(value, ensure_ascii=False).encode('utf-8')
+        timings=getattr(self,'_board_timing',None)
+        if timings is not None:
+            with timings.phase('json_encode'):payload=json.dumps(value,ensure_ascii=False).encode('utf-8')
+        else:payload=json.dumps(value,ensure_ascii=False).encode('utf-8')
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', str(len(payload)))
+        if timings is not None:
+            for key,value in timings.headers():self.send_header(key,value)
         for key,value in headers or []:self.send_header(key,value)
         self.end_headers()
-        self.wfile.write(payload)
+        if timings is not None:
+            try:
+                with timings.phase('response_write'):self.wfile.write(payload)
+            finally:timings.emit()
+        else:self.wfile.write(payload)
 
     def do_GET(self):
         try:
@@ -321,6 +331,7 @@ class Handler(SimpleHTTPRequestHandler):
         return self.reply(payload,503)
 
     def get_response(self):
+        self._board_timing=None
         parsed = urlparse(self.path)
         if parsed.path.startswith('/api/collection/') and parsed.path != '/api/collection/status':
             return self.reply({'error': COLLECTION_MESSAGE, 'code': 'COLLECTION_DISABLED'}, 503)
@@ -347,10 +358,10 @@ class Handler(SimpleHTTPRequestHandler):
             with connect() as db:
                 begin_read(db)
                 row=db.execute('SELECT mode FROM runtime_control WHERE id=1').fetchone()
-                if not row or row['mode']!='open':return self.reply({'ready':False,'code':'NOT_READY'},503)
-                return self.reply({'ready':True})
+                if not row or row['mode']!='open':return self.reply({'ready':False,'code':'NOT_READY'},503,headers=[('X-Board-Build',board_performance.BUILD_ID)])
+                return self.reply({'ready':True},headers=[('X-Board-Build',board_performance.BUILD_ID)])
         if parsed.path=='/api/health':
-            return self.reply({'service':'douyin-account-board','shared':os.environ.get('DOUYIN_BOARD_SHARED_WEB')=='1','authentication_required':True,'board_guard':'response-kept'})
+            return self.reply({'service':'douyin-account-board','shared':os.environ.get('DOUYIN_BOARD_SHARED_WEB')=='1','authentication_required':True,'board_guard':'response-kept'},headers=[('X-Board-Build',board_performance.BUILD_ID)])
         if parsed.path=='/api/idempotency/result':
             try:
                 with connect() as db:
@@ -379,9 +390,10 @@ class Handler(SimpleHTTPRequestHandler):
                     accounts=[dict(row) for row in db.execute('SELECT * FROM accounts') if row['id'] in allowed]
                 return self.reply({'collection':collection.overview(db,accounts),'can_manage':False})
         if parsed.path=='/api/auth/me':
-            with connect() as db:
-                user=auth.session(db,self.headers.get('Cookie'))
-                state=dict(user=user,initialized=auth.initialized(db),can_setup=auth.can_setup(db,self.headers.get('Cookie')),
+            timings=board_performance.BoardTimings.from_environment();self._board_timing=timings
+            with timings.connection(connect) as db:
+                with timings.phase('auth'):user=auth.session(db,self.headers.get('Cookie'))
+                with timings.phase('auth_meta'):state=dict(user=user,initialized=auth.initialized(db),can_setup=auth.can_setup(db,self.headers.get('Cookie')),
                            permissions=auth.PERMISSIONS,roles=auth.ROLES,defaults=auth.DEFAULTS,
                            permission_groups=auth.PERMISSION_GROUPS,permission_details=auth.PERMISSION_DETAILS)
             return self.reply(state)
@@ -470,9 +482,10 @@ class Handler(SimpleHTTPRequestHandler):
             if parsed.path.startswith('/api/'):return self.reply({'error':'接口不存在'},404)
             return super().do_GET()
         try:
-            with connect() as db:
-                begin_read(db)
-                actor=auth.session(db,self.headers.get('Cookie'))
+            timings=board_performance.BoardTimings.from_environment();self._board_timing=timings
+            with timings.connection(connect) as db:
+                with timings.phase('read_begin'):begin_read(db)
+                with timings.phase('auth'):actor=auth.session(db,self.headers.get('Cookie'))
                 if not actor:return self.reply({'error':'请先登录工作台'},401)
                 view=parse_qs(parsed.query).get('view',[''])[0]
                 if view not in ('','work','detail'):return self.reply({'error':'读取范围不正确'},400)
@@ -484,30 +497,33 @@ class Handler(SimpleHTTPRequestHandler):
                 except ValueError:
                     return self.reply({'error':'日期格式不正确'}, 400)
                 computer_order=integer_order(db,"CASE WHEN id LIKE 'office3:%' THEN substr(id,9) ELSE id END")
-                computers = [dict(r) for r in db.execute("SELECT * FROM computers ORDER BY CASE WHEN id LIKE 'office3:%' THEN 1 ELSE 0 END,"+computer_order+",id")]
-                accounts = [dict(r) for r in db.execute('SELECT a.*,COALESCE(d.published,0) AS published FROM accounts a LEFT JOIN daily d ON d.account_id=a.id AND d.day=? ORDER BY '+integer_order(db,'a.computer_id')+',a.slot', (day,))]
-                context=office_scope.read_context(db,actor) if getattr(db,'scope_enabled',False) else None
-                if context:computers,accounts=office_scope.filter_board_entities(context,computers,accounts)
-                collection_info=None if view else collection.overview(db,accounts if context else None)
-                account_lifecycle.enrich(accounts, today())
-                card_info=phone_cards.overview(db,context['ids']['cards'] if context else None,accounts if context else None)
-                device_info=phone_devices.overview(db,accounts,context['ids']['devices'] if context else None)
-                workflow_info=device_workflow.overview(db,accounts,device_info['devices'],card_info['cards'],actor=actor)
+                with timings.phase('entities'):
+                    computers = [dict(r) for r in db.execute("SELECT * FROM computers ORDER BY CASE WHEN id LIKE 'office3:%' THEN 1 ELSE 0 END,"+computer_order+",id")]
+                    accounts = [dict(r) for r in db.execute('SELECT a.*,COALESCE(d.published,0) AS published FROM accounts a LEFT JOIN daily d ON d.account_id=a.id AND d.day=? ORDER BY '+integer_order(db,'a.computer_id')+',a.slot', (day,))]
+                with timings.phase('scope'):
+                    context=office_scope.read_context(db,actor) if getattr(db,'scope_enabled',False) else None
+                    if context:computers,accounts=office_scope.filter_board_entities(context,computers,accounts)
+                with timings.phase('collection'):collection_info=None if view else collection.overview(db,accounts if context else None)
+                with timings.phase('lifecycle'):account_lifecycle.enrich(accounts, today())
+                with timings.phase('cards'):card_info=phone_cards.overview(db,context['ids']['cards'] if context else None,accounts if context else None)
+                with timings.phase('devices'):device_info=phone_devices.overview(db,accounts,context['ids']['devices'] if context else None)
+                with timings.phase('workflow'):workflow_info=device_workflow.overview(db,accounts,device_info['devices'],card_info['cards'],actor=actor)
                 if context:
                     for kind,rows in [('cards',card_info['cards']),('devices',device_info['devices'])]:
                         for row in rows:row['office_ids']=context['maps'][kind].get(row['id'],[])
-                layout_info=publishing_layout.overview(db,context['ids']['accounts'] if context else None,context['ids']['computers'] if context else None)
-                record_versions={} if view else (operations.versions(db,context,daily_day=day) if version_scope=='day' else operations.versions(db,context))
-                nurture_info=nurture.overview(db,today(),context['ids']['accounts'] if context else None,view!='work')
-                offices=office_scope.list_offices(db,actor) if context else []
-                sync_cursor=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+                with timings.phase('layout'):layout_info=publishing_layout.overview(db,context['ids']['accounts'] if context else None,context['ids']['computers'] if context else None)
+                with timings.phase('versions'):record_versions={} if view else (operations.versions(db,context,daily_day=day) if version_scope=='day' else operations.versions(db,context))
+                with timings.phase('nurture'):nurture_info=nurture.overview(db,today(),context['ids']['accounts'] if context else None,view!='work')
+                with timings.phase('offices'):offices=office_scope.list_offices(db,actor,context=context) if context else []
+                with timings.phase('cursor'):sync_cursor=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+            with timings.phase('backup'):backup_info=backup.status() if not view else None
             if view=='work':
                 computers,accounts,card_info,device_info,layout_info,nurture_info=workspace_summary(computers,accounts,card_info,device_info,layout_info,nurture_info)
                 self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),phone_cards=card_info,phone_devices=device_info,device_workflow=dict(enabled=workflow_info['enabled'],todos=workflow_info['todos'],units=[picked(unit,('id','device_id','label')) for unit in workflow_info['units']]),user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='summary'))
             elif view=='detail':
                 self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='detail'))
             else:
-                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup.status(),phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices,cursor=sync_cursor))
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup_info,phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices,cursor=sync_cursor))
         except AdmissionRejected:
             raise
 

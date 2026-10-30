@@ -34,12 +34,14 @@ def migrate(db):
         db.execute("ALTER TABLE accounts ADD COLUMN nurture_started TEXT NOT NULL DEFAULT ''")
 
 
-def snapshot(db,*,daily_day=None):
+def snapshot(db,*,daily_day=None,scope_maps=None):
     result={}
     scoped=getattr(db,'scope_enabled',False)
     if scoped:
         import office_scope
-        maps=office_scope.scope_maps(db)
+        # Only a caller's same-transaction read context may supply these maps.
+        # Record values themselves always come from their original SQL rows.
+        maps=office_scope.scope_maps(db) if scope_maps is None else scope_maps
     import device_workflow
     tables = {**TABLE_KEYS, **(WORKFLOW_TABLE_KEYS if device_workflow.available(db) else {})}
     for table in tables:
@@ -52,7 +54,10 @@ def snapshot(db,*,daily_day=None):
 
 
 def versions(db,context=None,*,daily_day=None):
-    records=snapshot(db) if daily_day is None else snapshot(db,daily_day=daily_day)
+    options={}
+    if daily_day is not None:options['daily_day']=daily_day
+    if context is not None and getattr(db,'scope_enabled',False):options['scope_maps']=context['maps']
+    records=snapshot(db,**options)
     if context is not None:
         import office_scope
         tables={value:key for key,value in PREFIX.items()}

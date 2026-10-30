@@ -38,7 +38,11 @@ def admitted(db):
 
 
 def granted_offices(db, actor):
-    actor = current_user(db, actor)
+    return _granted_offices(db, current_user(db, actor))
+
+
+def _granted_offices(db, actor):
+    """Read with an actor refreshed by this call's authenticated transaction."""
     if global_scope(actor):
         return {row[0] for row in db.execute('SELECT id FROM offices WHERE active=1')}
     return {row[0] for row in db.execute('SELECT g.office_id FROM user_office_grants g JOIN offices o ON o.id=g.office_id WHERE g.user_id=? AND o.active=1', (actor['id'],))}
@@ -59,7 +63,11 @@ def entity_offices(db, kind, ident):
 
 
 def visible_ids(db, actor, kind):
-    actor = current_user(db, actor)
+    return _visible_ids(db, current_user(db, actor), kind)
+
+
+def _visible_ids(db, actor, kind):
+    """Internal counterpart; public/write callers still refresh permissions."""
     table, mapping, key, single = ENTITIES[kind]
     if global_scope(actor):
         return {row[0] for row in db.execute('SELECT id FROM ' + table)}
@@ -179,7 +187,9 @@ def record_offices(maps, table, row):
 
 def read_context(db, actor):
     actor = current_user(db, actor)
-    return dict(global_access=global_scope(actor), grants=granted_offices(db,actor), ids={kind:visible_ids(db,actor,kind) for kind in ENTITIES}, maps=scope_maps(db))
+    # One caller-owned read snapshot: do not cache this actor or these maps
+    # across requests, or reuse them to authorize a later write transaction.
+    return dict(actor_id=actor['id'], global_access=global_scope(actor), grants=_granted_offices(db,actor), ids={kind:_visible_ids(db,actor,kind) for kind in ENTITIES}, maps=scope_maps(db))
 
 
 def record_visible(context, table, row):
@@ -220,10 +230,17 @@ def filter_board_entities(context, computers, accounts):
     return computers, accounts
 
 
-def list_offices(db, actor):
-    actor = current_user(db, actor)
-    allowed = granted_offices(db, actor)
-    return [dict(row) for row in db.execute('SELECT id,name,active FROM offices ORDER BY name,id') if global_scope(actor) or row['id'] in allowed]
+def list_offices(db, actor, context=None):
+    """An explicit context must belong to this authenticated read transaction."""
+    if context is None:
+        actor = current_user(db, actor)
+        allowed, global_access = granted_offices(db, actor), global_scope(actor)
+    else:
+        auth.require(actor)
+        if context.get('actor_id') != actor['id']:
+            raise auth.AccessError('办公室读取上下文不属于当前人员', 403)
+        allowed, global_access = context['grants'], context['global_access']
+    return [dict(row) for row in db.execute('SELECT id,name,active FROM offices ORDER BY name,id') if global_access or row['id'] in allowed]
 
 
 def scope_version(kind,ident,offices):
