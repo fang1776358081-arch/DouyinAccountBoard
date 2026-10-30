@@ -14,6 +14,8 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 import board_updates
 import board_performance
+import json_transport
+import account_transport
 import heavy_work
 import collection
 import account_lifecycle
@@ -284,10 +286,30 @@ class Handler(SimpleHTTPRequestHandler):
         if timings is not None:
             with timings.phase('json_encode'):payload=json.dumps(value,ensure_ascii=False).encode('utf-8')
         else:payload=json.dumps(value,ensure_ascii=False).encode('utf-8')
+        headers=list(headers or [])
+        coding=None
+        if (status==200 and getattr(self,'command','GET')=='GET'
+                and urlparse(getattr(self,'path','')).path=='/api/board'
+                and not any(key.lower()=='content-encoding' for key,_ in headers)):
+            request_headers=getattr(self,'headers',{})
+            encoding_values=request_headers.get_all('Accept-Encoding') if hasattr(request_headers,'get_all') else None
+            accepted=', '.join(encoding_values) if encoding_values else request_headers.get('Accept-Encoding')
+            if timings is not None:
+                with timings.phase('compression'):prepared=json_transport.prepare(payload,accepted)
+            else:prepared=json_transport.prepare(payload,accepted)
+            payload,coding=prepared.body,prepared.content_encoding
+            if not prepared.acceptable:status=406
+            vary=[]
+            for key,value in headers:
+                if key.lower()=='vary':vary.extend(part.strip() for part in value.split(',') if part.strip())
+            if '*' in vary:vary=['*']
+            elif not any(value.lower()=='accept-encoding' for value in vary):vary.append('Accept-Encoding')
+            headers=[(key,value) for key,value in headers if key.lower()!='vary']+[('Vary',', '.join(vary))]
         self.send_response(status)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
         self.send_header('Cache-Control', 'no-store')
         self.send_header('Content-Length', str(len(payload)))
+        if coding:self.send_header('Content-Encoding',coding)
         if timings is not None:
             for key,value in timings.headers():self.send_header(key,value)
         for key,value in headers or []:self.send_header(key,value)
@@ -489,6 +511,8 @@ class Handler(SimpleHTTPRequestHandler):
                 if not actor:return self.reply({'error':'请先登录工作台'},401)
                 view=parse_qs(parsed.query).get('view',[''])[0]
                 if view not in ('','work','detail'):return self.reply({'error':'读取范围不正确'},400)
+                compact=parse_qs(parsed.query).get('compact',[''])[0]
+                if compact not in ('','accounts') or (compact and view):return self.reply({'error':'传输范围不正确'},400)
                 version_scope=parse_qs(parsed.query).get('version_scope',[''])[0]
                 if version_scope not in ('','day'):return self.reply({'error':'版本读取范围不正确'},400)
                 day = parse_qs(parsed.query).get('date', [today()])[0]
@@ -523,7 +547,10 @@ class Handler(SimpleHTTPRequestHandler):
             elif view=='detail':
                 self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='detail'))
             else:
-                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup_info,phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices,cursor=sync_cursor))
+                result=dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup_info,phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices,cursor=sync_cursor)
+                if compact:
+                    with timings.phase('wire_compact'):result=account_transport.compact(result)
+                self.reply(result)
         except AdmissionRejected:
             raise
 

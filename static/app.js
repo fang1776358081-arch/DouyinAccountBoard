@@ -26,7 +26,7 @@ async function readDailyState(id,day,retries=1){
  const keys=['account:'+id,dailyKey(id,day)],before=Object.fromEntries(keys.map(key=>[key,dailyVersion(key)])),cursor=data?.cursor,view=dailyViewGeneration,opened=data;
  // A full board read supplies the flag and versions from one read transaction.
  // It is a recovery path, not a second read on every successful daily write.
- const board=await api('/api/board?date='+encodeURIComponent(day)+'&version_scope=day',undefined,{applyVersions:false});
+ const board=await api('/api/board?date='+encodeURIComponent(day)+'&version_scope=day'+(page==='accounts'?'&compact=accounts':''),undefined,{applyVersions:false});
  const row=board.accounts?.find(account=>String(account.id)===String(id));
  if(board.date!==day||!row||!board.record_versions||![true,false,0,1].includes(row.published))throw Error('发布记录尚未核对成功，请刷新后重试');
  const versions=Object.fromEntries(keys.map(key=>[key,board.record_versions[key]??null])),key=dailyKey(id,day);
@@ -88,7 +88,7 @@ async function toggleDaily(id){
  })();
  syncDailyButtons();return entry.running;
 }
-async function load(allowWorkflowReload=false){if(window.DeviceWorkflow?.isOpen()&&allowWorkflowReload!==true)return;const view=++dailyViewGeneration;dailyViewLoading=view;const serial=++requestSerial;globalThis.requestSerial=requestSerial;try{const next=await api('/api/board?version_scope=day'+($('date').value?'&date='+encodeURIComponent($('date').value):''));if(serial!==requestSerial||window.DeviceWorkflow?.isOpen()&&allowWorkflowReload!==true)return;showBoard(next);}catch(e){$('loadError').textContent='加载失败：'+e.message;$('loadError').hidden=false;}finally{if(dailyViewLoading===view)dailyViewLoading=0;}}
+async function load(allowWorkflowReload=false){if(window.DeviceWorkflow?.isOpen()&&allowWorkflowReload!==true)return;const view=++dailyViewGeneration;dailyViewLoading=view;const serial=++requestSerial;globalThis.requestSerial=requestSerial;try{const next=await api('/api/board?version_scope=day'+($('date').value?'&date='+encodeURIComponent($('date').value):'')+(page==='accounts'?'&compact=accounts':''));if(serial!==requestSerial||window.DeviceWorkflow?.isOpen()&&allowWorkflowReload!==true)return;showBoard(next);}catch(e){$('loadError').textContent='加载失败：'+e.message;$('loadError').hidden=false;}finally{if(dailyViewLoading===view)dailyViewLoading=0;}}
 function boardStorage(){if(typeof localStorage==='undefined')return null;return localStorage;}
 function readBoardCache(){const storage=boardStorage();if(!storage)return null;try{const parsed=JSON.parse(storage.getItem('douyin-board-view')||'null');if(!parsed||typeof parsed!=='object'||parsed.userId==null||!parsed.board||!Number.isInteger(parsed.board.cursor)||parsed.board.user?.id==null||!parsed.board.device_workflow||typeof parsed.board.device_workflow!=='object')return null;if(String(parsed.board.user.id)!==String(parsed.userId))return null;return parsed;}catch(error){return null;}}
 function writeBoardCache(){const storage=boardStorage();if(!storage||!data||data.user?.id==null||!Number.isInteger(data.cursor))return;try{storage.setItem('douyin-board-view',JSON.stringify({userId:data.user.id,board:data}));}catch(error){}}

@@ -46,9 +46,15 @@
 - 办公室和资料版本只在同一读取事务内复用已核实的范围映射，不跨请求缓存权限，也不改变写操作的重新授权或并发校验。
 - “待匹配分类处理”折叠时只更新数量，展开后才计算完整候选；原分类、独立筛选、分页和关联权限保持。发布矩阵本身未重写。
 - 可在受控诊断时设置 `DOUYIN_BOARD_TIMING=1`，为 board 和 auth/me 增加 `Server-Timing`，并向 `douyin_board.performance` logger 写固定阶段名及毫秒数；默认不输出。不会记录请求参数、SQL、账号、Cookie、令牌或连接串。
-- `/api/health` 与 `/api/ready` 的 `X-Board-Build` 响应头标记正在处理请求的后端发布版本；当前为 `publish-firstscreen-20261030-r1`。它不改变原JSON、就绪条件或权限，也不读取请求参数/环境秘密或逐请求调用Git。发布收据须另绑定提交号和源码哈希，不能用该标记反推出旧版本。
+- `/api/health` 与 `/api/ready` 的 `X-Board-Build` 响应头标记正在处理请求的后端发布版本；当前为 `board-gzip-accounts-20261030-r1`。它不改变原JSON、就绪条件或权限，也不读取请求参数/环境秘密或逐请求调用Git。发布收据须另绑定提交号和源码哈希，不能用该标记反推出旧版本。
 - 计时头截至编码/发头前，不包含正文发送；日志额外有 `response_write`。它是服务器写入缓冲区耗时，不等于客户端传输时间。错误在事务内提前回复时，其计时不含随后连接退出；HTTP准入排队、真实PG连接内的TLS/槽位细分、浏览器布局和绘制须另测。
 - 本次对照新增 `test_publish_first_screen_backend`、`test_publish_first_screen_http`、`test_publish_first_screen_frontend.cjs` 及 `benchmark_publish_first_screen.cjs`。前端基准是实际JS在合成DOM/Fetch中的CPU下界，不能当作真实浏览器或线上秒数；响应体仍包含全量授权资料，专用 `view=publish` 和懒加载尚未实施。
+
+账号资料页的响应传输另有两项兼容优化：
+
+- 成功的 GET `/api/board` 按 `Accept-Encoding` 的权重协商 gzip/identity，普通响应至少1KB且压缩更小时才用 gzip；明确禁用 identity 时按协商处理，不支持任何可用编码时返回406空体。编码后计算 `Content-Length`，添加 `Vary: Accept-Encoding`，鉴权及 `Cache-Control: no-store` 保持；登录、身份和错误响应不压缩。不依赖预先存在的 Nginx，也不新增公共缓存。
+- 账号页请求可选的 `compact=accounts`，在完整权限过滤及版本计算后，仅去掉没有前端消费者的派生字段和已证明相等的重复关系表示。完整账号、电脑、统计/筛选资料、卡及设备基础资料、流程、养号、布局与全部原有版本令牌仍保留；不改变业务记录。关系缺失、脱敏、不一致或身份歧义时保留原字段。默认接口不精简，旧服务器忽略此参数时网页仍可使用。
+- `test_json_transport`、`test_account_transport` 和 `test_transport_http` 通过隔离 runner 执行；`test_account_transport_frontend.cjs` 验证实际脚本的筛选、导出、导航、流程窗口和版本锁兼容。计时新增固定阶段 `compression`、`wire_compact`，仍不记录资料。回环 SQLite 的字节数、解压/解析和阶段耗时不代表真实 PostgreSQL、公网、代理或浏览器可操作时间。
 
 ## 自动同步日志
 

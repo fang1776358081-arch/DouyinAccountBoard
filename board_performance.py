@@ -6,13 +6,13 @@ import os
 import time
 
 
-BUILD_ID = 'publish-firstscreen-20261030-r1'
+BUILD_ID = 'board-gzip-accounts-20261030-r1'
 
 
 PHASES = frozenset(('connect', 'transaction_close', 'read_begin', 'auth', 'auth_meta',
     'entities', 'scope', 'collection', 'lifecycle', 'cards', 'devices', 'workflow',
     'layout', 'versions', 'nurture', 'offices', 'cursor', 'backup', 'json_encode',
-    'response_write'))
+    'response_write', 'compression', 'wire_compact'))
 
 
 class BoardTimings:

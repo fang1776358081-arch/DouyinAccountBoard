@@ -402,7 +402,7 @@ class PublishFirstScreenHttpTest(unittest.TestCase):
         before, health = health_results['before'], health_results['after']
         self.assertEqual(health['status'], 200)
         self.assertEqual(health['body'], before['body'])
-        self.assertEqual(health['headers']['X-Board-Build'], 'publish-firstscreen-20261030-r1')
+        self.assertEqual(health['headers']['X-Board-Build'], board_performance.BUILD_ID)
         self.assertEqual(health['server']['connections'], 0)
         self.assertEqual(health['server']['counts'], dict(queries=0, selects=0, rows_returned=0))
         self.assertNotIn('Server-Timing', health['headers'])
