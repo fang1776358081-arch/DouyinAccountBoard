@@ -422,6 +422,11 @@ def _missing_nickname_suggestions(db, account_rows):
 
 def preview(db, actor, body, day):
     actor = _require(db, actor, body)
+    if body.get('mode') == 'fill_missing_nicknames':
+        import office_three_nickname
+        return office_three_nickname.preview(db, actor, body, day)
+    if body.get('mode') not in (None, ''):
+        raise ValueError('导入方式不正确，请重新预览')
     account_rows, progress_rows = _read_sources(body)
     before = _snapshot(db)
     plan, summary, items, warnings = _plan(db, account_rows, progress_rows, day)
@@ -527,6 +532,11 @@ def _verify_preserved(db, before):
 
 def apply(db, actor, body, day):
     actor = _require(db, actor, body)
+    if body.get('mode') == 'fill_missing_nicknames':
+        import office_three_nickname
+        return office_three_nickname.apply(db, actor, body, day)
+    if body.get('mode') not in (None, ''):
+        raise ValueError('导入方式不正确，请重新预览')
     if body.get('confirmation') != CONFIRMATION:
         raise ValueError('请明确输入“导入办公室三”后确认，仅新增安全资料')
     ident = body.get('preview_id')

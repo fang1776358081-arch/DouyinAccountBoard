@@ -280,8 +280,8 @@ class Handler(SimpleHTTPRequestHandler):
         except (TimeoutError, ValueError, OSError):
             self.close_connection = True
 
-    def reply(self, value, status=200, headers=None):
-        if isinstance(value,dict) and hasattr(self,'_version_delta'):value={**value,'_record_versions':self._version_delta}
+    def reply(self, value, status=200, headers=None, *, include_versions=True):
+        if include_versions and isinstance(value,dict) and hasattr(self,'_version_delta'):value={**value,'_record_versions':self._version_delta}
         timings=getattr(self,'_board_timing',None)
         if timings is not None:
             with timings.phase('json_encode'):payload=json.dumps(value,ensure_ascii=False).encode('utf-8')
@@ -397,6 +397,8 @@ class Handler(SimpleHTTPRequestHandler):
                     if outcome[0]=='pending':return self.reply({'error':'结果待确认','code':'REQUEST_PENDING'},409)
                     if outcome[0]=='expired':raise idempotency.IdempotencyError('RESULT_EXPIRED','该请求的结果已超过保留期，不能再次执行')
                     status,body=outcome[3],outcome[4]
+                    if outcome[2]=='/api/workspace/office-three-import-apply' and body.get('mode')=='fill_missing_nicknames':
+                        return self.reply({**body,'code':'REQUEST_SUCCEEDED' if status==200 else 'REQUEST_FAILED'},status,include_versions=False)
                     return self.reply({**body,'code':'REQUEST_SUCCEEDED' if status==200 else 'REQUEST_FAILED'},status)
             except auth.AccessError as error:return self.reply({'error':str(error)},error.status)
             except idempotency.IdempotencyError as error:return self.reply({'error':str(error),'code':error.code},error.status)
@@ -665,9 +667,11 @@ class Handler(SimpleHTTPRequestHandler):
         return outcome
 
     def idempotent_create(self, db, actor, path, body, perform, integrity_message='保存未能完成，请核对后重试', recheck=None, record_operations=True):
+        nickname_fill=path=='/api/workspace/office-three-import-apply' and body.get('mode')=='fill_missing_nicknames'
         outcome = self._claim_idempotent(db, actor, path, body)
         if outcome[0] == 'replay':
             db.rollback()
+            if nickname_fill:return self.reply(outcome[2],outcome[1],include_versions=False)
             return self.reply(outcome[2], outcome[1])
         if outcome[0] == 'reserved':
             db.commit()
@@ -681,6 +685,7 @@ class Handler(SimpleHTTPRequestHandler):
             outcome = self._claim_idempotent(db, actor, path, body)
             if outcome[0] == 'replay':
                 db.rollback()
+                if nickname_fill:return self.reply(outcome[2],outcome[1],include_versions=False)
                 return self.reply(outcome[2], outcome[1])
             if outcome[0] != 'continue':
                 raise idempotency.IdempotencyError('REQUEST_ID_REUSED', '请求标识已结束，不能重复写入')
@@ -691,12 +696,13 @@ class Handler(SimpleHTTPRequestHandler):
             if record_operations:
                 operations.finish(self, db, actor, path, change_state)
                 auth.audit(db, actor, path, str(result.get('id', '')))
-            if isinstance(result, dict) and hasattr(self, '_version_delta'):
+            if isinstance(result, dict) and hasattr(self, '_version_delta') and not nickname_fill:
                 result = {**result, '_record_versions': self._version_delta}
             idempotency.complete(db, actor, body, 'succeeded', 200, result)
             db.execute('RELEASE SAVEPOINT idem_business')
-            if path in ('/api/device-workflow','/api/workspace/office-three-import-apply','/api/workspace/office-three-import-computer-scopes'):board_updates.notify_reload(db)
+            if path in ('/api/device-workflow','/api/workspace/office-three-import-apply','/api/workspace/office-three-import-computer-scopes') and not nickname_fill:board_updates.notify_reload(db)
             db.commit()
+            if nickname_fill:return self.reply(result,include_versions=False)
             return self.reply(result)
         except AdmissionRejected:
             raise
@@ -773,6 +779,8 @@ class Handler(SimpleHTTPRequestHandler):
                     return self.reply({'error':'新增账号必须带请求标识','code':'REQUEST_ID_REQUIRED'},400)
                 if self.path in ('/api/workspace/office-three-import-apply','/api/workspace/office-three-import-computer-scopes'):
                     idempotency.request_uuid(body.get('request_id'))
+                if self.path=='/api/workspace/office-three-import-apply' and body.get('mode')=='fill_missing_nicknames' and not getattr(db,'restore_generation',None):
+                    raise ValueError('补全昵称需要持久请求确认，请先完成系统配置；未修改资料')
                 if self.path=='/api/phone-card' and not body.get('id') and getattr(db,'restore_generation',None) and not body.get('request_id'):
                     db.rollback()
                     return self.reply({'error':'新增手机卡必须带请求标识','code':'REQUEST_ID_REQUIRED'},400)
@@ -884,6 +892,10 @@ class Handler(SimpleHTTPRequestHandler):
                     db.commit()
                     return self.reply(result)
                 if body.get('request_id') and getattr(db,'restore_generation',None):
+                    if self.path=='/api/workspace/office-three-import-apply' and body.get('mode')=='fill_missing_nicknames':
+                        # This service verifies the name-only snapshot after its
+                        # own history/audit writes; never finish or sync twice.
+                        return self.idempotent_create(db,actor,self.path,body,lambda database,current:workspace_service.post(database,current,self.path,body,DB,today()),record_operations=False)
                     if self.path=='/api/account/create':
                         return self.idempotent_create(db,actor,self.path,body,lambda database,current:{'ok':True,'id':account_service.save(database,body,current,today(),create=True)},'这个电脑位置已经有账号，请选择空位')
                     if self.path=='/api/account':

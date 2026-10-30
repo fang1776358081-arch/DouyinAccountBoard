@@ -6,7 +6,7 @@ import os
 import time
 
 
-BUILD_ID = 'board-gzip-accounts-20261030-r1'
+BUILD_ID = 'nickname-fill-20261030-r1'
 
 
 PHASES = frozenset(('connect', 'transaction_close', 'read_begin', 'auth', 'auth_meta',
