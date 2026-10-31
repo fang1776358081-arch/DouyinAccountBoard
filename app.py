@@ -96,7 +96,7 @@ def picked(row, fields):
 def workspace_summary(computers, accounts, card_info, device_info, layout_info, nurture_info):
     return (
         [picked(row, ('id', 'office_ids')) for row in computers],
-        [{**picked(row, ('id', 'name', 'status', 'lifecycle', 'published', 'computer_id', 'nurture_started', 'registration_phone', 'phone_device_id', 'office_ids', 'office_group')),
+        [{**picked(row, ('id', 'name', 'douyin_id', 'status', 'lifecycle', 'published', 'computer_id', 'nurture_started', 'registration_phone', 'phone_device_id', 'office_ids', 'office_group')),
           'device_access': picked(row['device_access'], ('login_state', 'recovery_state')) if row.get('device_access') else None} for row in accounts],
         dict(cards=[picked(row, ('id', 'phone', 'owner', 'code_state', 'return_state', 'return_due', 'code_note', 'status', 'office_ids')) for row in card_info['cards']]),
         dict(devices=[picked(row, ('id', 'name', 'state', 'attention', 'office_ids')) for row in device_info['devices']]),

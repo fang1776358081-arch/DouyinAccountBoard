@@ -1,0 +1,48 @@
+.console-page #accountWorkspace > .account-filter-toolbar { display: block; padding: 16px 20px; }
+.console-page .account-common-filters,
+.console-page .account-more-fields,
+.console-page .account-filter-actions { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; }
+.console-page .account-common-filters .field-search,
+.console-page .account-more-fields .field-search { flex: 1 1 145px; max-width: 230px; min-width: 130px; }
+.console-page .account-common-filters .field-search select,
+.console-page .account-more-fields .field-search select { width: 100%; max-width: none; }
+.console-page .account-filter-actions { margin-left: auto; }
+.console-page .account-more-filters { margin-top: 12px; border-top: 1px solid #edf0f5; padding-top: 10px; }
+.console-page .account-more-filters > summary { cursor: pointer; color: #4d657e; font-size: 12px; width: fit-content; }
+.console-page .account-more-fields { padding-top: 12px; }
+.console-page .account-active-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 20px 14px; font-size: 12px; }
+.console-page .account-filter-count { margin-right: 4px; color: #4f637c; white-space: nowrap; }
+.console-page .account-filter-chip { padding: 5px 9px; background: #eef6f3; color: #276655; border: 1px solid #d6e7df; border-radius: 6px; font-size: 11px; max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.console-page .account-filter-chip span { margin-left: 5px; }
+.console-page .account-filter-empty { color: #7a8798; font-size: 11px; }
+.console-page .account-batch-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.console-page .account-batch-content { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex: 1 1 auto; }
+.console-page .legacy-account-bulk[hidden] { display: none; }
+.console-page .account-table { min-width: 1000px; width: 100%; }
+.console-page .account-table th:first-child { width: 38px; }
+.console-page .account-table td { vertical-align: top; }
+.console-page .account-table .account-identity { min-width: 165px; }
+.console-page .account-table .account-position { min-width: 220px; max-width: 320px; }
+.console-page .account-table .account-status { min-width: 100px; }
+.console-page .account-row-details { min-width: 150px; max-width: 320px; }
+.console-page .account-row-details > summary { width: fit-content; cursor: pointer; color: #287b64; font-size: 12px; padding: 3px 0; }
+.console-page .account-row-detail-content { margin-top: 8px; padding: 10px; background: #f7f9fc; border: 1px solid #e4eaf0; border-radius: 6px; min-width: 220px; overflow-wrap: anywhere; }
+.console-page .account-row-detail-content section + section { border-top: 1px solid #e2e8ef; margin-top: 10px; padding-top: 8px; }
+.console-page .account-row-detail-content h3 { font-size: 11px; color: #6b7b90; margin: 0 0 5px; font-weight: 600; }
+.console-page .account-row-detail-content .account-detail-note { white-space: pre-wrap; font-size: 11px; color: #4c6179; }
+.console-page .account-row-actions { white-space: nowrap; }
+.console-page .account-row-actions a { display: block; }
+@media (max-width: 1100px) {
+ .console-page .account-filter-actions { margin-left: 0; flex-basis: 100%; }
+ .console-page .account-common-filters .field-search,
+ .console-page .account-more-fields .field-search { max-width: none; }
+}
+@media (max-width: 640px) {
+ .console-page #accountWorkspace > .account-filter-toolbar { padding: 12px; }
+ .console-page .account-active-filters { padding: 0 12px 12px; }
+ .console-page .account-common-filters .field-search,
+ .console-page .account-more-fields .field-search { flex-basis: calc(50% - 5px); min-width: 0; }
+ .console-page .account-filter-actions .button,
+ .console-page .account-filter-actions .text-button { flex: 1 1 auto; }
+ .console-page .account-table { min-width: 900px; }
+}

@@ -74,7 +74,7 @@ class WorkspaceSummaryTest(unittest.TestCase):
                 account = work['accounts'][0]
                 self.assertEqual(account['id'], 'synth-account-1')
                 self.assertIn('lifecycle', account)
-                self.assertNotIn('douyin_id', account)
+                self.assertEqual(account['douyin_id'], 'synthetic_001')
                 self.assertNotIn('name', work['computers'][0])
                 record = work['nurture']['records'][0]
                 self.assertEqual(record['account_id'], 'synth-account-1')

@@ -63,10 +63,10 @@ function attributes(current, id, expected) {
 
 const pages = ['index.html', 'workspace.html', 'users.html', 'login.html'].map(page);
 const consoles = pages.slice(0, 3), login = pages[3];
-for (const current of pages) check(current.name + ': local assets and final versioned theme', () => {
+for (const current of pages) check(current.name + ': local assets and versioned theme with page overrides', () => {
   const expected = current === login ? 'login-theme.css' : 'console-theme.css';
   const styleAssets = current.styles.map(tag => asset(tag.attributes.href));
-  assert.equal(styleAssets.at(-1), expected);
+  assert.equal(styleAssets.at(-1), current === pages[0] ? 'account-workspace.css' : expected);
   assert.equal(styleAssets.filter(name => name === expected).length, 1);
   assert.match(current.styles.at(-1).attributes.href, /\?v=\d{8}/);
   for (const script of current.scripts) {
@@ -83,9 +83,9 @@ for (const current of pages) check(current.name + ': local assets and final vers
 const expectedScripts = {
   'index.html': words(`device-workflow.js scope-ui.js edit-versions.js identity-labels.js
     field-search.js lifecycle.js phone-cards.js phone-devices.js offices.js publishing-layout.js
-    publishing-match.js publishing-pending.js workspace-shortcuts.js auth-ui.js verification.js batch-edit.js app.js`),
+    publishing-match.js publishing-pending.js workspace-shortcuts.js auth-ui.js verification.js batch-edit.js account-workspace.js app.js`),
   'workspace.html': words(`device-workflow.js scope-ui.js identity-labels.js field-search.js
-    edit-versions.js workspace-model.js nurture.js batch-edit.js workspace.js collection-panel.js`),
+    edit-versions.js workspace-model.js account-review.js nurture.js batch-edit.js office-three-import.js workspace.js collection-panel.js`),
   'users.html': ['users.js'],
   'login.html': ['login.js'],
 };

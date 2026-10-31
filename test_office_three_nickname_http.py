@@ -72,6 +72,31 @@ class NicknameHttpTest(unittest.TestCase):
             return {name: [dict(row) for row in db.execute('SELECT * FROM ' + name + ' ORDER BY 1')]
                     for name in ('operations_history', 'auth_audit', 'idempotency_records')}
 
+    def test_review_summary_keeps_exact_identity_with_existing_office_filter_and_no_writes(self):
+        import office_scope
+        with app.connect() as db:
+            begin_write(db)
+            office_scope.grant_user(db, self.actor, self.employee_id, ['three'])
+            db.execute("UPDATE accounts SET douyin_id='000Synthetic_Review' WHERE id='old-three'")
+        self.employee = support.test_auth_support.client(self.base, 'synthetic_import_employee')
+        before = self.snapshot()
+        def read(client):
+            with client.open(self.base + '/api/board?view=work&date=' + support.DAY, timeout=10) as response:
+                self.assertEqual(response.headers.get('Cache-Control'), 'no-store')
+                return json.load(response)
+        with patch.object(operations, 'versions', side_effect=AssertionError('review opened full versions')):
+            owner = read(self.owner)
+            employee = read(self.employee)
+        self.assertEqual(employee['workspace_view'], 'summary')
+        self.assertEqual(employee['record_versions'], {})
+        self.assertEqual([row['id'] for row in employee['accounts']], ['old-three'])
+        self.assertEqual(employee['accounts'][0]['douyin_id'], '000Synthetic_Review')
+        self.assertEqual(employee['accounts'][0]['office_ids'], ['three'])
+        self.assertNotIn('note', employee['accounts'][0])
+        self.assertNotIn('images', employee['nurture'])
+        self.assertGreater(len(owner['accounts']), len(employee['accounts']))
+        self.assertEqual(self.snapshot(), before)
+
     def test_apply_replay_only_changes_name_and_delivers_incremental_history(self):
         before = self.snapshot()
         with app.connect() as db:
