@@ -16,7 +16,7 @@ phone-devices.js publishing-layout.js publishing-match.css publishing-match.js
 publishing-pending.css publishing-pending.js styles.css users.css users.html users.js
 verification.css verification.js scope-ui.js workspace-model.js workspace-shortcuts.js workspace.css
 workspace.html workspace.js office-three-import.js device-workflow.js device-workflow.css
-account-review.js account-workspace.js account-workspace.css'''.split()
+account-review.js account-workspace.js account-workspace.css card-filters.js card-filters.css'''.split()
 FILES = tuple(PYTHON_FILES + ['static/' + name for name in STATIC_FILES])
 
 
