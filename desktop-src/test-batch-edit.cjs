@@ -5,11 +5,11 @@ const context={$:field,document:{addEventListener(){}},esc:v=>String(v??''),hasP
 vm.createContext(context);
 for(const name of ['edit-versions.js','batch-edit.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../static',name),'utf8'),context);
 context.batchSelection('cards').add('1');context.batchSelection('cards').add('2');
-assert.match(context.batchBar('cards'),/已选 2 条手机卡/);
+assert.match(context.batchBar('cards'),/已选 <strong>2<\/strong> 张手机卡/);
 assert.equal(context.batchCurrentPage('cards').length,1);
 assert.equal(context.batchFields('cards').map(f=>f[0]).join(','),'owner,ownership,keeper,code_contact');
 assert.ok(context.batchFields('cards').every(f=>f[3]==='card_manage'));
-cards.pop();assert.match(context.batchBar('cards'),/已选 1 条手机卡/);
+cards.pop();assert.match(context.batchBar('cards'),/已选 <strong>1<\/strong> 张手机卡/);
 context.hasPermission=()=>false;assert.match(context.batchBar('cards'),/data-batch-open="cards" data-batch-source="cards" disabled/);
 assert.match(context.batchPick('cards','1'),/checked/);
 assert.equal(context.batchRecord('cards','1').owner,'原卡主');
