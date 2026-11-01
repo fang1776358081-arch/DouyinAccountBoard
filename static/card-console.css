@@ -6,22 +6,8 @@
  --ui-info:#2563a6; --ui-radius:8px; --ui-control:36px;
  --ui-space-1:4px; --ui-space-2:8px; --ui-space-3:12px; --ui-space-4:16px; --ui-space-6:24px;
 }
-.cards-console {color:var(--ui-text);background:var(--ui-bg);font-size:14px;line-height:22px;font-variant-numeric:tabular-nums;--console-sidebar:216px;}
-.cards-console > main {min-width:0;max-width:none;margin-left:var(--console-sidebar);padding:24px 28px 32px;}
-.cards-console > aside {width:var(--console-sidebar);background:#fff;color:var(--ui-text);border-right:1px solid var(--ui-border);padding:24px 12px;}
-.cards-console .brand {padding:0 8px 24px;border-color:var(--ui-border);color:var(--ui-text);font-size:16px;letter-spacing:0;}
-.cards-console .brand-icon {width:34px;height:34px;flex-basis:34px;border-radius:8px;box-shadow:none;background:var(--ui-primary);}
-.cards-console .brand small,.cards-console .nav-label,.cards-console .sidebar-bottom,.cards-console .sidebar-bottom small {color:var(--ui-secondary);}
-.cards-console .nav-label {letter-spacing:.5px;margin:20px 12px 12px;}
-.cards-console .nav-group[open],.cards-console .nav-group > summary:hover {background:#f8fafb;}
-.cards-console .nav-group > summary {color:var(--ui-text);font-size:14px;min-height:50px;}
-.cards-console .nav-group > summary small {color:var(--ui-secondary);font-size:11px;}
-.cards-console .nav-group > summary::before {border-color:#8b98a9;box-shadow:none;background:none;}
-.cards-console .nav-group > summary::after {border-color:#8b98a9;}
-.cards-console .nav-submenu .nav-item {font-size:14px;color:#4b586b;min-height:38px;border:0;}
-.cards-console .nav-submenu .nav-item:hover {color:var(--ui-primary);background:#f1f7f5;}
-.cards-console .nav-submenu .nav-item.active {color:var(--ui-primary);background:var(--ui-primary-soft);box-shadow:none;font-weight:600;}
-.cards-console .sidebar-bottom {border-color:var(--ui-border);font-size:11px;}
+.cards-console {color:var(--ui-text);background:var(--ui-bg);font-size:14px;line-height:22px;font-variant-numeric:tabular-nums;}
+.cards-console > main {min-width:0;max-width:none;padding:24px 28px 32px;}
 .cards-console > main > header {margin-bottom:8px;gap:16px;align-items:center;}
 .cards-console .eyebrow {font-size:12px;color:var(--ui-secondary);margin-bottom:6px;}
 .cards-console h1 {font-size:24px;line-height:32px;font-weight:600;letter-spacing:0;margin:0;}
@@ -124,8 +110,8 @@
 .card-details-drawer .card-account-row {padding:12px;background:#f8fafb;border:1px solid #edf0f3;border-radius:6px;margin-top:8px;}
 .cards-console [hidden] {display:none!important;}
 @media(min-width:1680px){.cards-console > main{padding-left:32px;padding-right:32px}.cards-console .card-table :is(th,td){padding-left:16px;padding-right:16px}}
-@media(max-width:1280px){.cards-console{--console-sidebar:200px}.cards-console > main{padding:20px}.cards-console .card-common-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.cards-console .card-filter-actions{grid-column:1/-1;justify-content:flex-end}.cards-console .card-advanced-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.card-selection-entry > span{display:none}}
-@media(max-width:800px){.cards-console{--console-sidebar:180px}.cards-console .card-common-filters,.cards-console .card-advanced-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.cards-console .stats{grid-template-columns:repeat(2,minmax(0,1fr))}.cards-console .stat{border-bottom:1px solid var(--ui-border)}.cards-console .stat small{display:none}.card-filter-heading>span{display:none}.cards-console .panel-heading{flex-wrap:wrap}.cards-console .card-pagination{gap:8px;padding:12px}.card-details-grid{grid-template-columns:1fr}}
+@media(max-width:1280px){.cards-console > main{padding:20px}.cards-console .card-common-filters{grid-template-columns:repeat(4,minmax(0,1fr))}.cards-console .card-filter-actions{grid-column:1/-1;justify-content:flex-end}.cards-console .card-advanced-fields{grid-template-columns:repeat(3,minmax(0,1fr))}.card-selection-entry > span{display:none}}
+@media(max-width:800px){.cards-console .card-common-filters,.cards-console .card-advanced-fields{grid-template-columns:repeat(2,minmax(0,1fr))}.cards-console .stats{grid-template-columns:repeat(2,minmax(0,1fr))}.cards-console .stat{border-bottom:1px solid var(--ui-border)}.cards-console .stat small{display:none}.card-filter-heading>span{display:none}.cards-console .panel-heading{flex-wrap:wrap}.cards-console .card-pagination{gap:8px;padding:12px}.card-details-grid{grid-template-columns:1fr}}
 
 .cards-console .card-table .card-status-cancelled {background:#f2f4f7;color:#667085;border-color:#e4e7ec;}
 .card-details-source {max-height:240px;overflow:auto;padding:12px;background:#f8fafb;border:1px solid var(--ui-border);border-radius:6px;}

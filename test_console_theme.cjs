@@ -66,7 +66,7 @@ const consoles = pages.slice(0, 3), login = pages[3];
 for (const current of pages) check(current.name + ': local assets and versioned theme with page overrides', () => {
   const expected = current === login ? 'login-theme.css' : 'console-theme.css';
   const styleAssets = current.styles.map(tag => asset(tag.attributes.href));
-  assert.equal(styleAssets.at(-1), current === pages[0] ? 'card-filters.css' : expected);
+  assert.equal(styleAssets.at(-1), current === pages[0] ? 'card-console.css' : expected);
   assert.equal(styleAssets.filter(name => name === expected).length, 1);
   assert.match(current.styles.at(-1).attributes.href, /\?v=\d{8}/);
   for (const script of current.scripts) {
@@ -81,7 +81,7 @@ for (const current of pages) check(current.name + ': local assets and versioned 
 });
 
 const expectedScripts = {
-  'index.html': words(`device-workflow.js live-sync.js scope-ui.js edit-versions.js identity-labels.js
+  'index.html': words(`device-workflow.js card-page.js card-details.js live-sync.js scope-ui.js edit-versions.js identity-labels.js
     field-search.js lifecycle.js card-filters.js phone-cards.js phone-devices.js offices.js publishing-layout.js
     publishing-match.js publishing-pending.js workspace-shortcuts.js auth-ui.js verification.js batch-edit.js account-workspace.js account-inline.js app.js`),
   'workspace.html': words(`device-workflow.js live-sync.js scope-ui.js identity-labels.js field-search.js
@@ -190,6 +190,22 @@ check('themes preserve hidden semantics and do not force closed dialogs visible'
         assert.match(display[1], /^none(?:\s*!important)?$/i, 'closed dialog visibility remains browser-controlled');
     }
   }
+});
+
+check('business pages share one sidebar theme and responsive geometry', () => {
+  const shared = withoutComments(read('console-theme.css'));
+  const cards = withoutComments(read('card-console.css'));
+  const sharedLinks = consoles.map(current => current.styles.find(tag => tag.attributes.href.startsWith('/console-theme.css?')).attributes.href);
+  assert.equal(new Set(sharedLinks).size, 1, 'all management entries use the same shared theme revision');
+  assert.match(shared, /\.console-page\s*>\s*aside\s*\{[^}]*background\s*:\s*var\(--console-nav-bg\)/);
+  assert.match(shared, /--console-nav-bg\s*:\s*#fff\s*;/);
+  assert.doesNotMatch(cards, /--console-sidebar\s*:/, 'card view must not redefine shell width at any breakpoint');
+  for (const rule of cards.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    if (!rule[1].includes('.cards-console')) continue;
+    assert.doesNotMatch(rule[1], /(?:^|[\s>])aside\b|\.(?:brand(?:-icon)?|nav-label|nav-group|nav-submenu|nav-item|sidebar-bottom)\b/, 'page-specific CSS must not retheme sidebar');
+    if (/\.cards-console\s*>\s*main\b/.test(rule[1])) assert.doesNotMatch(rule[2], /margin-left\s*:/, 'shared mobile main offset must remain effective');
+  }
+  assert.match(shared, /@media\s*\(max-width:\s*650px\)\s*\{[\s\S]*?\.console-page\s*>\s*aside\s*\{[^}]*position:\s*static;[^}]*width:\s*100%/);
 });
 
 check('source-only package includes both theme stylesheets', () => {
