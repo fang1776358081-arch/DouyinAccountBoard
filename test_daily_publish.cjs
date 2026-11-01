@@ -9,6 +9,9 @@ const key=date=>'daily:'+id+':'+date;
 const clone=value=>JSON.parse(JSON.stringify(value));
 const response=(body,status=200)=>({ok:status>=200&&status<300,status,json:async()=>clone(body)});
 const deferred=()=>{let resolve,reject;const promise=new Promise((ok,no)=>{resolve=ok;reject=no;});return {promise,resolve,reject};};
+// Keep the existing daily-write ABA/readback race coverage independent of the
+// background poller, which now correctly defers during every pending write.
+function authoritativeNotice(page){page.context.syntheticNotice=page.updates;page.run('for(const change of syntheticNotice.changes)applyCaughtChange(change);data.cursor=syntheticNotice.cursor;writeBoardCache();');}
 
 function harness(published=false){
  const elements=new Map(),storage=new Map(),listeners=new Map(),calls=[];
@@ -134,7 +137,7 @@ async function test(name,body){await body();checks++;console.log('ok '+name);}
   p.server.flags[day]=false;p.server.versions[key(day)]='daily-v2';p.updates={cursor:12,changes:[
    {entity:key(day),after:{published:1},record_version:'daily-v1'},
    {entity:key(day),after:{published:0},record_version:'daily-v2'}]};
-  await p.run('catchUpBoard()');assert.equal(p.flag(),false);assert.equal(p.context.data.cursor,12);
+  authoritativeNotice(p);assert.equal(p.flag(),false);assert.equal(p.context.data.cursor,12);
   wait.resolve(wait.saved);await pending;assert.equal(p.flag(),false);assert.equal(p.context.data.record_versions[key(day)],'daily-v2');
   assert.equal(p.cached().cursor,12);assert.equal(p.cached().accounts[0].published,false);
  });
@@ -145,7 +148,7 @@ async function test(name,body){await body();checks++;console.log('ok '+name);}
   p.server.flags[day]=false;p.server.versions[key(day)]='daily-v0';p.updates={cursor:12,changes:[
    {entity:key(day),after:{published:1},record_version:'daily-v1'},
    {entity:key(day),after:{published:0},record_version:'daily-v0'}]};
-  await p.run('catchUpBoard()');wait.resolve(wait.saved);await pending;
+  authoritativeNotice(p);wait.resolve(wait.saved);await pending;
   assert.equal(p.flag(),false);assert.equal(p.context.data.record_versions[key(day)],'daily-v0');assert.equal(p.cached().cursor,12);
   assert.ok(p.calls.some(call=>call.url.startsWith('/api/board?')));
  });
@@ -156,7 +159,7 @@ async function test(name,body){await body();checks++;console.log('ok '+name);}
   assert.ok(p.calls.some(call=>call.url.startsWith('/api/board?')));
   p.updates={cursor:12,changes:[{entity:key(day),after:{published:1},record_version:'daily-v1'},
    {entity:key(day),after:{published:0},record_version:'daily-v0'}]};
-  await p.run('catchUpBoard()');const stale=p.snapshot(day);stale.accounts[0].published=true;stale.record_versions[key(day)]='daily-v1';wait.resolve(response(stale));await pending;
+  authoritativeNotice(p);const stale=p.snapshot(day);stale.accounts[0].published=true;stale.record_versions[key(day)]='daily-v1';wait.resolve(response(stale));await pending;
   assert.equal(p.flag(),false);assert.equal(p.cached().record_versions[key(day)],'daily-v0');assert.equal(p.cached().cursor,12);
   assert.equal(reads,2);
  });

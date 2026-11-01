@@ -57,7 +57,7 @@ async function main(){
   assert.ok(page.element('accountsBody').innerHTML.includes(namedMarkup(page,OLD_NAME)));
   assert.equal(cached(page).board.accounts[0].name,OLD_NAME);
  });
- transport(page,url=>{assert.match(url,/^\/api\/board-updates\?cursor=(10|11)$/);return response({cursor:11,changes:[change]});});
+ transport(page,url=>{assert.match(url,/^\/api\/board-updates\?cursor=(10|11)&limit=200&wait=5$/);return response({cursor:11,changes:[change]});});
  await page.run('catchUpBoard()');
  check('account history delta replaces the placeholder in state and escaped rendered content',()=>{
   assert.equal(page.run('data.accounts[0].name'),NEW_NAME);assert.ok(page.element('accountsBody').innerHTML.includes(namedMarkup(page,NEW_NAME)));
@@ -80,12 +80,12 @@ async function main(){
   page.run('activeOffice="three";render()');page.element('computer').value=wire.accounts[0].computer_id;
   page.element('loginPhoneFilter').value='device:'+wire.accounts[0].phone_device_id;page.run('render()');
   assert.deepEqual(page.rowIds(),['account-0']);assert.ok(page.element('accountsBody').innerHTML.includes(namedMarkup(page,NEW_NAME)));
-  assert.deepEqual(page.calls,['/api/board-updates?cursor=10']);
+  assert.deepEqual(page.calls,['/api/board-updates?cursor=10&limit=200&wait=5']);
  });
  await page.run('catchUpBoard()');
  check('replayed account delta does not append a duplicate or regress the name',()=>{
   assert.equal(page.run('data.accounts.length'),4);assert.equal(page.run('data.accounts[0].name'),NEW_NAME);
-  assert.equal(cached(page).board.accounts[0].name,NEW_NAME);assert.deepEqual(page.calls,['/api/board-updates?cursor=10','/api/board-updates?cursor=11']);
+  assert.equal(cached(page).board.accounts[0].name,NEW_NAME);assert.deepEqual(page.calls,['/api/board-updates?cursor=10&limit=200&wait=5','/api/board-updates?cursor=11&limit=200&wait=5']);
  });
  const warmOld=harness();writeCache(warmOld,wire);let releaseAuth;
  const authWait=new Promise(resolve=>{releaseAuth=resolve;});
@@ -98,7 +98,7 @@ async function main(){
  check('same-user warm startup repairs old cached name through a bounded delta',()=>{
   assert.equal(warmOld.run('data.accounts[0].name'),NEW_NAME);assert.equal(cached(warmOld).board.accounts[0].name,NEW_NAME);
   assert.ok(warmOld.element('accountsBody').innerHTML.includes(namedMarkup(warmOld,NEW_NAME)));
-  assert.deepEqual(warmOld.calls,['/api/auth/me','/api/board-updates?cursor=10']);
+  assert.deepEqual(warmOld.calls,['/api/auth/me','/api/board-updates?cursor=10&limit=200&wait=5']);
  });
  const warmNew=harness();writeCache(warmNew,cached(warmOld).board);
  transport(warmNew,url=>response(url==='/api/auth/me'?{user:{id:wire.user.id}}:{cursor:11,changes:[]}));
@@ -107,7 +107,7 @@ async function main(){
   const account=plain(warmNew.run('data.accounts[0]'));
   assert.equal(account.name,NEW_NAME);assert.equal(account.douyin_id,'synthetic-raw-000701');assert.deepEqual(account.office_ids,['three']);
   assert.equal(account.phone_device_id,wire.accounts[0].phone_device_id);assert.equal(account.computer_id,wire.accounts[0].computer_id);
-  assert.deepEqual(warmNew.calls,['/api/auth/me','/api/board-updates?cursor=11']);assert.equal(cached(warmNew).board.accounts[0].name,NEW_NAME);
+  assert.deepEqual(warmNew.calls,['/api/auth/me','/api/board-updates?cursor=11&limit=200&wait=5']);assert.equal(cached(warmNew).board.accounts[0].name,NEW_NAME);
  });
  console.log(JSON.stringify({passed:true,checks,environment:'synthetic actual JavaScript with DOM, Fetch and storage stubs; no browser, network or database'}));
 }

@@ -313,19 +313,23 @@ class PublishFirstScreenHttpTest(unittest.TestCase):
             ('assigned', '?view=work&date=' + DAY), ('assigned', '?view=detail&date=' + DAY)]
         for role, query in cases:
             with self.subTest(role=role, query=query):
-                if 'view=work' in query:
-                    # The read-only review now needs the existing authorized
-                    # handle in the summary. Keep the frozen source immutable
-                    # and verify this is the only additive payload difference.
+                if 'view=work' in query or 'view=detail' in query:
+                    # Only the authorized handle (work) and transaction cursor
+                    # (work/detail) are additive. Keep the frozen source immutable.
                     with self.application('before'):
                         previous = self.get('/api/board' + query, role)
                     with self.application('after'):
                         current = self.get('/api/board' + query, role)
                         detail = self.get('/api/board?view=detail&date=' + DAY, role)
+                        full = self.get('/api/board?date=' + DAY, role)
                     self.assertEqual(current['status'], previous['status'])
                     projected = dict(current['value'])
-                    projected['accounts'] = [{key: value for key, value in row.items() if key != 'douyin_id'}
-                                             for row in current['value']['accounts']]
+                    self.assertIs(type(projected.pop('cursor')), int)
+                    self.assertGreaterEqual(current['value']['cursor'], 0)
+                    self.assertEqual(current['value']['cursor'], full['value']['cursor'])
+                    if 'view=work' in query:
+                        projected['accounts'] = [{key: value for key, value in row.items() if key != 'douyin_id'}
+                                                 for row in current['value']['accounts']]
                     self.assertEqual(projected, previous['value'])
                     expected = {row['id']: row['douyin_id'] for row in detail['value']['accounts']}
                     self.assertEqual({row['id']: row['douyin_id'] for row in current['value']['accounts']}, expected)

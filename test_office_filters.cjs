@@ -94,7 +94,7 @@ function harness() {
     accountSearchMatches() { return true; }, verificationMatches() { return true; },
     renderVerificationFilter() {}, verificationMarkup() { return ''; }, lifecycleDetails() { return ''; },
     applyPermissions() {}, hasPermission() { return false; }, lifecycleEdit() {}, readinessEdit() {},
-    captureVersions() {}, applyAccountPermissions() {}, lifecyclePayload() { return {}; }, readinessPayload() { return {}; },
+    captureVersions() {}, applyVersionDelta() {}, applyAccountPermissions() {}, lifecyclePayload() { return {}; }, readinessPayload() { return {}; },
     ScopeUI: {mount() {}, payload() { return {}; }},
     setTimeout() { return 0; }, clearTimeout() {}, setInterval() { return 0; },
     document: {
@@ -109,7 +109,11 @@ function harness() {
     addEventListener() {}, updatePayload: {cursor: 11, changes: []},
     async fetch(url) {
       calls.push(url);
-      assert.match(url, /^\/api\/board-updates\?cursor=\d+$/, 'all unexpected requests are blocked');
+      if (/^\/api\/board\?/.test(url)) {
+        assert.ok(context.serverBoard, 'derived changes require an explicit authorized snapshot fixture');
+        return {ok: true, status: 200, json: async () => structuredClone(context.serverBoard)};
+      }
+      assert.match(url, /^\/api\/board-updates\?cursor=\d+&limit=200&wait=5$/, 'all unexpected requests are blocked');
       return {ok: true, status: 200, json: async () => structuredClone(context.updatePayload)};
     },
   };
@@ -125,7 +129,7 @@ function harness() {
   // with the real render() without claiming to test their table renderers.
   run('renderPhones=()=>{};renderCards=()=>{};');
   assert.deepEqual(calls, [], 'neither app startup nor script insertion can make a request');
-  assert.deepEqual(scripts, ['/board-updates.js']);
+  assert.deepEqual(scripts, ['/board-updates.js?v=20261102-inline']);
   return {
     context, run, element, calls,
     show(next = fixture()) { context.nextBoard = next; run('showBoard(nextBoard)'); },
@@ -250,9 +254,11 @@ const resourceIds = (page, kind) => Array.from(page.run(`officeFilterResources($
   const incremental = harness();
   incremental.show(); incremental.element('loginPhoneFilter').value = 'device:office3:1';
   incremental.context.updatePayload = {cursor: 11, changes: [{entity: 'device:office3:1', after: {id: 'office3:1', office_ids: ['one']}}]};
+  incremental.context.serverBoard = fixture(); incremental.context.serverBoard.cursor = 11;
+  incremental.context.serverBoard.phone_devices.devices.find(device => device.id === 'office3:1').office_ids = ['one'];
   await incremental.run('catchUpBoard()');
-  check('real incremental path re-renders changed device ownership and clears stale filter', () => {
-    assert.deepEqual(incremental.calls, ['/api/board-updates?cursor=10']);
+  check('real incremental notice reads authorized ownership snapshot and clears stale filter', () => {
+    assert.deepEqual(incremental.calls, ['/api/board-updates?cursor=10&limit=200&wait=5','/api/board?version_scope=day&date=2026-10-28&compact=accounts']);
     assert.equal(incremental.element('loginPhoneFilter').value, '');
     assert.equal(incremental.element('loginPhoneFilter').selectedIndex, 0);
     assert.equal(incremental.values('loginPhoneFilter').includes('device:office3:1'), false);

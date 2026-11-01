@@ -11,6 +11,26 @@ import operations
 _condition = threading.Condition()
 _version = None
 _pending = None
+_committed_notice = 0
+
+
+def committed_notice():
+    """A process-local wake hint; durable, authorized history remains authoritative."""
+    with _condition:
+        return _committed_notice
+
+
+def notify_committed():
+    global _committed_notice
+    with _condition:
+        _committed_notice += 1
+        _condition.notify_all()
+
+
+def wait_committed(known, seconds):
+    """Wait without a database connection or any business payload in memory."""
+    with _condition:
+        _condition.wait_for(lambda: _committed_notice != known, timeout=seconds)
 
 
 def recipients(actor, update):
@@ -139,10 +159,12 @@ def change_visible(actor, offices):
     return bool(granted & {str(item) for item in offices})
 
 
-def since(db, cursor, actor):
+def since(db, cursor, actor, limit=None):
     """Return committed changes after cursor. A missing cursor or a reload marker is a full reload."""
     if type(cursor) is not int or cursor < 0:
         raise ValueError('同步记号不正确')
+    if limit is not None and (type(limit) is not int or not 1 <= limit <= 500):
+        raise ValueError('同步读取上限必须是1至500的整数')
     if cursor != 0 and not db.execute('SELECT 1 FROM operations_history WHERE id=?', (cursor,)).fetchone():
         latest = db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
         return {'reload': True, 'cursor': latest}
@@ -150,9 +172,19 @@ def since(db, cursor, actor):
         query = 'SELECT id,entity,after_json,scope_offices FROM operations_history WHERE id>? ORDER BY id'
     else:
         query = 'SELECT id,entity,after_json,NULL FROM operations_history WHERE id>? ORDER BY id'
+    parameters = (cursor,)
+    if limit is not None:
+        # Count raw history rows, including invisible ones, to bound database
+        # work without leaking or silently skipping a partially read batch.
+        rows = list(db.execute(query + ' LIMIT ?', (*parameters, limit + 1)))
+        if len(rows) > limit:
+            latest = db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0]
+            return {'reload': True, 'cursor': latest}
+    else:
+        rows = db.execute(query, parameters)
     changes = []
     latest = cursor
-    for row in db.execute(query, (cursor,)):
+    for row in rows:
         latest = row[0]
         if row[1] == 'sync:reload':
             return {'reload': True, 'cursor': latest}

@@ -81,10 +81,10 @@ for (const current of pages) check(current.name + ': local assets and versioned 
 });
 
 const expectedScripts = {
-  'index.html': words(`device-workflow.js scope-ui.js edit-versions.js identity-labels.js
+  'index.html': words(`device-workflow.js live-sync.js scope-ui.js edit-versions.js identity-labels.js
     field-search.js lifecycle.js card-filters.js phone-cards.js phone-devices.js offices.js publishing-layout.js
-    publishing-match.js publishing-pending.js workspace-shortcuts.js auth-ui.js verification.js batch-edit.js account-workspace.js app.js`),
-  'workspace.html': words(`device-workflow.js scope-ui.js identity-labels.js field-search.js
+    publishing-match.js publishing-pending.js workspace-shortcuts.js auth-ui.js verification.js batch-edit.js account-workspace.js account-inline.js app.js`),
+  'workspace.html': words(`device-workflow.js live-sync.js scope-ui.js identity-labels.js field-search.js
     edit-versions.js workspace-model.js account-review.js nurture.js batch-edit.js office-three-import.js workspace.js collection-panel.js`),
   'users.html': ['users.js'],
   'login.html': ['login.js'],

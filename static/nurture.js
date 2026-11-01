@@ -8,13 +8,13 @@ function renderNurture(){
  };
  ['nurtureOffice','nurturePhone','nurtureName','nurtureOwner','nurtureStage','nurtureVerification'].forEach(id=>$(id).oninput=show);
  $('workspaceBody').querySelectorAll('[data-nurture-stage]').forEach(button=>button.onclick=()=>{$('nurtureStage').value=button.dataset.nurtureStage;show();});
- $('nurtureJoin').onclick=()=>{
-  const available=data.accounts.filter(account=>!active.some(record=>record.account_id===account.id));
+ const join=()=>{
+  const available=data.accounts.filter(account=>!(data.nurture?.records||[]).some(record=>!record.completed_on&&record.account_id===account.id));
   openNurtureDialog(`<h2>添加到待检查</h2><p>加入不会自动开始计时，也不会改变账号状态。先检查账号是否能正常使用。</p>${input('joinId','账号昵称','输入昵称筛选')}<select id="joinChoice" aria-label="选择养号账号"></select><button class="button" id="joinConfirm">确认加入待检查</button>`);
   const choices=()=>{$('joinChoice').innerHTML=available.filter(a=>containsText(a.name,searchValue('joinId'))).slice(0,100).map(a=>`<option value="${esc(a.id)}">${esc(accountDisplay(a))}</option>`).join('');};$('joinId').oninput=choices;choices();$('joinConfirm').onclick=()=>{const id=$('joinChoice').value;nurtureAction('/join',{id,request_id:claimRequestId('nurture-join:'+id)});};
- };show();
+ };$('nurtureJoin').onclick=()=>{if(window.LiveSync&&typeof prepareWorkspaceEdit==='function')prepareWorkspaceEdit(join).catch(fail);else join();};if(typeof restoreWorkspaceSyncFields==='function')restoreWorkspaceSyncFields();show();
 }
-function openNurtureDialog(content){let dialog=$('nurtureDialog');if(!dialog){dialog=document.createElement('dialog');dialog.id='nurtureDialog';document.body.append(dialog);}dialog.innerHTML=`<div class="dialog-head"><span>核对与养号记录</span><button class="text-button" id="closeNurture">关闭</button></div>${content}<p id="nurtureError" role="alert"></p>`;$('closeNurture').onclick=()=>dialog.close();captureVersions('nurtureDialog');dialog.showModal();}
+function openNurtureDialog(content){let dialog=$('nurtureDialog');if(!dialog){dialog=document.createElement('dialog');dialog.id='nurtureDialog';document.body.append(dialog);}dialog.innerHTML=`<div class="dialog-head"><span>核对与养号记录</span><button class="text-button" id="closeNurture">关闭</button></div>${content}<p id="nurtureError" role="alert"></p>`;$('closeNurture').onclick=()=>dialog.close();captureVersions('nurtureDialog');if(window.LiveSync&&typeof freezeWorkspaceVersions==='function')freezeWorkspaceVersions('nurtureDialog');dialog.showModal();}
 function nurtureRequestKey(path,id,imageId){return path==='/upload'?'nurture-upload:'+id:path==='/join'?'nurture-join:'+id:path==='/start'?'nurture-start:'+id:path==='/verification'?'nurture-verification:'+id:path==='/pause'?'nurture-pause:'+id:path==='/resume'?'nurture-resume:'+id:path==='/finish'?'nurture-finish:'+id:path==='/delete-image'?'nurture-delete-image:'+id+':'+imageId:path==='/purge'?'nurture-purge:'+id:'';}
 async function nurtureAction(path,body){const button=document.activeElement;if(button?.tagName==='BUTTON')button.disabled=true;const requestKey=nurtureRequestKey(path,body.id,body.image_id);try{await send('/api/workspace/nurture'+path,body,capturedVersions.get('nurtureDialog'));if(body.request_id&&requestKey)settleRequestId(requestKey);$('nurtureDialog').close();await reload();}catch(error){if(body.request_id&&requestKey)settleRequestId(requestKey,error);$('nurtureError').textContent=error.message;}finally{if(button?.tagName==='BUTTON')button.disabled=false;}}
 function nurtureDetail(id){

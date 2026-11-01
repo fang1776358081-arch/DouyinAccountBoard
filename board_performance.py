@@ -6,7 +6,7 @@ import os
 import time
 
 
-BUILD_ID = 'ui-review-20261031-r1'
+BUILD_ID = 'account-collab-20261102-r1'
 
 
 PHASES = frozenset(('connect', 'transaction_close', 'read_begin', 'auth', 'auth_meta',

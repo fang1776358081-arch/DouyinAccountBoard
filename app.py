@@ -192,6 +192,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def send_response(self, code, message=None):
         self._response_started = True
+        self._response_status = code
         super().send_response(code, message)
 
     def handle_one_request(self):
@@ -397,6 +398,11 @@ class Handler(SimpleHTTPRequestHandler):
                     if outcome[0]=='pending':return self.reply({'error':'结果待确认','code':'REQUEST_PENDING'},409)
                     if outcome[0]=='expired':raise idempotency.IdempotencyError('RESULT_EXPIRED','该请求的结果已超过保留期，不能再次执行')
                     status,body=outcome[3],outcome[4]
+                    if (outcome[2]=='/api/account/patch' and 'record_version' in body
+                            and isinstance(body.get('account'),dict) and getattr(db,'scope_enabled',False)):
+                        # New inline receipts contain account text. A stored
+                        # UUID is not a grant to read a former office's text.
+                        office_scope.require_entity(db,actor,'accounts',body['account'].get('id'))
                     if outcome[2]=='/api/workspace/office-three-import-apply' and body.get('mode')=='fill_missing_nicknames':
                         return self.reply({**body,'code':'REQUEST_SUCCEEDED' if status==200 else 'REQUEST_FAILED'},status,include_versions=False)
                     return self.reply({**body,'code':'REQUEST_SUCCEEDED' if status==200 else 'REQUEST_FAILED'},status)
@@ -454,14 +460,32 @@ class Handler(SimpleHTTPRequestHandler):
         if parsed.path == '/api/board-updates':
             query=parse_qs(parsed.query)
             if 'cursor' in query:
+                # Capture before reading to avoid losing a local commit between
+                # the empty read and wait. Cross-process commits use timeout.
+                notice=board_updates.committed_notice()
+                try:wait=int(query.get('wait',['0'])[0])
+                except ValueError:wait=None
                 with connect() as db:
                     begin_read(db)
                     actor=auth.session(db,self.headers.get('Cookie'))
                     if not actor:return self.reply({'error':'请先登录工作台'},401)
                     try:cursor=int(query['cursor'][0])
                     except ValueError:return self.reply({'error':'同步记号不正确'},400)
-                    try:found=board_updates.since(db,cursor,actor)
+                    try:limit=int(query['limit'][0]) if 'limit' in query else None
+                    except ValueError:return self.reply({'error':'同步读取上限必须是1至500的整数'},400)
+                    if limit is not None and not 1<=limit<=500:return self.reply({'error':'同步读取上限必须是1至500的整数'},400)
+                    if wait is None or not 0<=wait<=5:return self.reply({'error':'同步等待时间必须是0至5的整数'},400)
+                    try:found=board_updates.since(db,cursor,actor,limit=limit)
                     except ValueError:return self.reply({'error':'同步记号不正确'},400)
+                if wait and found=={'changes':[],'cursor':cursor}:
+                    # Neither this wait nor a notification owns a DB lease.
+                    board_updates.wait_committed(notice,wait)
+                    with connect() as db:
+                        begin_read(db)
+                        actor=auth.session(db,self.headers.get('Cookie'))
+                        if not actor:return self.reply({'error':'请先登录工作台'},401)
+                        found=board_updates.since(db,cursor,actor,limit=limit)
+                if wait:found={**found,'wait_supported':True}
                 return self.reply(found)
             known=query.get('version',[''])[0]
             with connect() as db:
@@ -471,6 +495,15 @@ class Handler(SimpleHTTPRequestHandler):
                     board_updates.publish(operations.token(operations.versions(db)))
             if known==board_updates.current():return self.reply(board_updates.wait(known, actor))
             return self.reply({'version':board_updates.current()})
+        if parsed.path == '/api/account/inline':
+            with connect() as db:
+                begin_read(db)
+                actor=auth.session(db,self.headers.get('Cookie'))
+                if not actor:return self.reply({'error':'请先登录工作台'},401)
+                try:result=account_service.inline_account(db,actor,parse_qs(parsed.query).get('id',[''])[0])
+                except auth.AccessError:raise
+                except ValueError as error:return self.reply({'error':str(error)},400)
+            return self.reply(result)
         if parsed.path == '/api/record-versions':
             with connect() as db:
                 begin_read(db)
@@ -545,9 +578,9 @@ class Handler(SimpleHTTPRequestHandler):
             with timings.phase('backup'):backup_info=backup.status() if not view else None
             if view=='work':
                 computers,accounts,card_info,device_info,layout_info,nurture_info=workspace_summary(computers,accounts,card_info,device_info,layout_info,nurture_info)
-                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),phone_cards=card_info,phone_devices=device_info,device_workflow=dict(enabled=workflow_info['enabled'],todos=workflow_info['todos'],units=[picked(unit,('id','device_id','label')) for unit in workflow_info['units']]),user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='summary'))
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),phone_cards=card_info,phone_devices=device_info,device_workflow=dict(enabled=workflow_info['enabled'],todos=workflow_info['todos'],units=[picked(unit,('id','device_id','label')) for unit in workflow_info['units']]),user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='summary',cursor=sync_cursor))
             elif view=='detail':
-                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='detail'))
+                self.reply(dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions={},offices=offices,workspace_view='detail',cursor=sync_cursor))
             else:
                 result=dict(computers=computers,accounts=accounts,date=day,today=today(),statuses=STATES,collection=collection_info,backup=backup_info,phone_cards=card_info,phone_devices=device_info,device_workflow=workflow_info,user=actor,publishing_layout=layout_info,nurture=nurture_info,record_versions=record_versions,offices=offices,cursor=sync_cursor)
                 if compact:
@@ -696,6 +729,8 @@ class Handler(SimpleHTTPRequestHandler):
             if record_operations:
                 operations.finish(self, db, actor, path, change_state)
                 auth.audit(db, actor, path, str(result.get('id', '')))
+            if path=='/api/account/patch' and body.get('return_account') is True:
+                result={**result,**account_service.inline_account(db,actor,str(body.get('id','')))}
             if isinstance(result, dict) and hasattr(self, '_version_delta') and not nickname_fill:
                 result = {**result, '_record_versions': self._version_delta}
             idempotency.complete(db, actor, body, 'succeeded', 200, result)
@@ -723,7 +758,12 @@ class Handler(SimpleHTTPRequestHandler):
         heavy=self.path in ('/api/workspace/import-apply','/api/workspace/office-three-import-apply','/api/workspace/office-three-import-computer-scopes','/api/workspace/nurture/upload')
         if heavy:heavy_work.acquire()
         try:
-            return self._post_response()
+            result=self._post_response()
+            # _post_response has exited its connection contexts successfully:
+            # commit is complete before listeners wake. Replays/read-only POSTs
+            # may cause harmless hints; listeners still reread scoped history.
+            if 200<=getattr(self,'_response_status',0)<300:board_updates.notify_committed()
+            return result
         finally:
             if heavy:heavy_work.release()
 
@@ -763,6 +803,9 @@ class Handler(SimpleHTTPRequestHandler):
                     actor=auth.session(db,self.headers.get('Cookie'));auth.require(actor)
                     if not auth.hmac.compare_digest(self.headers.get('X-CSRF-Token',''),actor['csrf']):raise auth.AccessError('页面已过期，请刷新后重试')
                     auth.authorize_route(db,actor,self.path,body)
+                    if self.path=='/api/account/patch' and 'return_account' in body:
+                        if type(body['return_account']) is not bool:raise ValueError('账号回执选项必须为布尔值')
+                        if body['return_account'] and set(body.get('changes',{}))-{'name','status','note'}:raise ValueError('行内编辑仅支持昵称、状态和备注')
                 if self.path=='/api/device-workflow':
                     idempotency.request_uuid(body.get('request_id'))
                     if getattr(db,'restore_generation',None):
@@ -1079,6 +1122,8 @@ class Handler(SimpleHTTPRequestHandler):
                     next_offices=sorted(office_scope.entity_offices(db,'accounts',saved_account)) if getattr(db,'scope_enabled',False) else None
                     board_updates.notify_office_move(db,saved_account,previous_offices=previous_offices,next_offices=next_offices)
                 result={'ok':True}
+                if self.path=='/api/account/patch' and body.get('return_account') is True:
+                    result.update(id=str(body.get('id','')),**account_service.inline_account(db,actor,str(body.get('id',''))))
                 if self.path=='/api/account':result['account']=account_service.board_account(db,saved_account,today())
                 elif self.path=='/api/daily':result['daily']=saved_daily
                 elif self.path in ['/api/phone-device','/api/phone-device/create']:result['id']=saved_device

@@ -10,6 +10,28 @@ PATCH_PERMISSIONS={**{key:'account_manage' for key in ('name','note','computer_i
     'status':'account_status','auxiliary_state':'account_progress','card_stability':'account_progress','password_state':'account_progress','phone_device_id':'device_manage'}
 
 
+def inline_account(db, actor, ident):
+    """One authorized account and its lock from the caller's current transaction.
+
+    The raw row is needed only to reproduce the existing account token. Return
+    no unrelated identity, phone, ownership or derived business fields.
+    """
+    import operations
+    auth.require(actor)
+    if not isinstance(ident,str) or not ident or len(ident)>500:raise ValueError('账号编号不正确')
+    offices=None
+    if getattr(db,'scope_enabled',False):
+        import office_scope
+        offices=sorted(office_scope.require_entity(db,actor,'accounts',ident))
+    row=db.execute('SELECT * FROM accounts WHERE id=?',(ident,)).fetchone()
+    if row is None:raise auth.AccessError('无权访问此资料',403)
+    record=dict(row)
+    if offices is not None:record['office_ids']=offices
+    return dict(account={key:record[key] for key in ('id','name','status','note')},
+        record_version=operations.token(record),
+        cursor=db.execute('SELECT COALESCE(MAX(id),0) FROM operations_history').fetchone()[0])
+
+
 def authorize_patch(db,actor,body):
     auth.require(actor)
     changes=body.get('changes')

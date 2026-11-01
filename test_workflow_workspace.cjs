@@ -13,7 +13,8 @@ assert.notEqual(controlledSource, workspaceSource, 'workspace bootstrap must be 
 function boardFixture() {
   return {
     date: '2026-10-26', today: '2026-10-26',
-    user: {name: '合成员工', role: 'staff', permissions: []}, offices: [], accounts: [],
+    user: {name: '合成员工', role: 'staff', permissions: []}, offices: [], computers: [], accounts: [],
+    publishing_layout: {enabled: false, cells: []}, nurture: {records: []},
     phone_devices: {devices: []}, phone_cards: {cards: []},
     device_workflow: {enabled: true, units: [], access: [], placements: [], cases: []},
     record_versions: {},
