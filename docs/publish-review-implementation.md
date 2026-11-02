@@ -88,6 +88,8 @@ PostgreSQL迁移 `migrations/postgresql/0006_publish_review.sql` 已注册到 `p
 
 ### 正式结构升级与回退
 
+已有合法v5时，可使用手动的一次性工具 `tools/upgrade_publish_review.py`，按 [升级工具说明](publish-review-upgrade-runbook.md) 执行。工具须明确提供已核对的提交及 `--execute`，不会在代码同步或启动时运行。后端工具发布标记为 `publish-review-20261103-upgrade-r1`；结构启用仍须单独核验。
+
 沿用 `docs/employee-card-migration-runbook.md` 的受控流程：仅在服务器已有合法认证会话中操作，核对工作目录/提交/原迁移哈希/维护状态/恢复代次，维护并排空写入，生成服务器私有0600完整备份，检查退出码、SHA256、目录及完整解码，校验恢复条件后调用既有 `pg_schema.apply_migrations(connection)`。禁止运行空库初始化或 `cloudbase_prepare.py`，不重置密码、权限、writer_epoch或restore_generation。
 
 - 原库v4：该有序函数会依次安装已发布0005及本次0006。0005只新增员工办卡配置，不创建真实或演示员工；不能为绕过它而跳号。原库v5：只追加0006。
