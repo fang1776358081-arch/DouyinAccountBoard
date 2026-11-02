@@ -24,9 +24,11 @@ class EmployeeCardsTest(unittest.TestCase):
         self.db = sqlite3.connect(checked_root() / ('employee-cards-' + uuid.uuid4().hex + '.db'), factory=ScopedConnection)
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA foreign_keys=ON')
-        self.db.executescript('''CREATE TABLE accounts(id TEXT PRIMARY KEY);
+        self.db.executescript('''CREATE TABLE accounts(id TEXT PRIMARY KEY,registration_phone TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT '',account_type TEXT NOT NULL DEFAULT '');
           CREATE TABLE offices(id TEXT PRIMARY KEY,name TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1);
           CREATE TABLE user_office_grants(user_id INTEGER,office_id TEXT,PRIMARY KEY(user_id,office_id));
+          CREATE TABLE account_offices(account_id TEXT,office_id TEXT,PRIMARY KEY(account_id,office_id));
           CREATE TABLE phone_card_offices(card_id INTEGER,office_id TEXT,PRIMARY KEY(card_id,office_id));''')
         auth.migrate(self.db)
         self.db.execute('ALTER TABLE auth_users ADD COLUMN authorization_version INTEGER NOT NULL DEFAULT 0')

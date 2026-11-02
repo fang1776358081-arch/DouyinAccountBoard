@@ -6,7 +6,7 @@ import os
 import time
 
 
-BUILD_ID = 'publish-review-20261103-upgrade-r2'
+BUILD_ID = 'employee-card-ledger-20261103-r1'
 
 
 PHASES = frozenset(('connect', 'transaction_close', 'read_begin', 'auth', 'auth_meta',

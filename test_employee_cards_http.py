@@ -13,6 +13,7 @@ from uuid import uuid4
 from test_isolation import checked_root
 import app
 import auth
+import board_performance
 import idempotency
 
 
@@ -96,6 +97,31 @@ class EmployeeCardsHTTPTest(unittest.TestCase):
                                   headers={'X-CSRF-Token': 'synthetic-invalid'})
         self.assertEqual(status, 403)
 
+    def test_release_marker_identifies_backend_without_changing_health_or_auth(self):
+        health_status, health, headers = self.call('/api/health')
+        self.assertEqual(health_status, 200)
+        self.assertEqual(headers['X-Board-Build'], board_performance.BUILD_ID)
+        self.assertEqual(health['service'], 'douyin-account-board')
+        self.assertTrue(health['authentication_required'])
+        with app.connect() as db:
+            db.execute('CREATE TABLE runtime_control(id INTEGER PRIMARY KEY, mode TEXT NOT NULL)')
+            db.execute("INSERT INTO runtime_control VALUES(1,'maintenance')")
+        ready_status, ready, ready_headers = self.call('/api/ready')
+        # These synthetic control rows exercise both existing readiness modes;
+        # changing a marker must never turn maintenance into a ready success.
+        self.assertEqual(ready_status, 503)
+        self.assertEqual(ready, {'ready': False, 'code': 'NOT_READY'})
+        self.assertEqual(ready_headers['X-Board-Build'], board_performance.BUILD_ID)
+        with app.connect() as db:
+            db.execute("UPDATE runtime_control SET mode='open' WHERE id=1")
+        ready_status, ready, ready_headers = self.call('/api/ready')
+        self.assertEqual(ready_status, 200)
+        self.assertEqual(ready, {'ready': True})
+        self.assertEqual(ready_headers['X-Board-Build'], board_performance.BUILD_ID)
+        status, _, employee_headers = self.call('/api/employee-cards', client=self.owner)
+        self.assertEqual(status, 200)
+        self.assertEqual(employee_headers['Cache-Control'], 'no-store')
+
     def test_new_module_reads_only_its_own_records_and_keeps_six_named_brands(self):
         with patch.object(app.operations, 'snapshot', side_effect=AssertionError('full board snapshot forbidden')):
             status, meta, headers = self.call('/api/employee-cards', client=self.owner)
@@ -172,6 +198,56 @@ class EmployeeCardsHTTPTest(unittest.TestCase):
     def test_page_size_is_bounded(self):
         status, _, _ = self.call('/api/employee-cards?page_size=10000', client=self.owner)
         self.assertEqual(status, 400)
+
+    def test_card_ledger_http_filters_detail_and_live_state_keep_old_data_unchanged(self):
+        _, receipt, _ = self.apply_preview(self.preview_employee('LEDGER-001'))
+        employee_id = receipt['employee_id']
+        with app.connect() as db:
+            card_id = db.execute('SELECT COALESCE(MAX(id),0)+100 FROM phone_cards').fetchone()[0]
+            db.execute("INSERT INTO phone_cards(id,phone,status,carrier) VALUES(?,?,?,?)",
+                       (card_id, '13800000999', '已注销', '民生电信'))
+        route = '/api/employee-cards?employee_id=' + employee_id
+        _, detail, _ = self.call(route, client=self.owner)
+        status, preview, _ = self.call('/api/employee-cards/preview',
+            {'action': 'card_link', 'employee_id': employee_id,
+             'data': {'card_id': card_id, 'operator_id': 'minsheng', 'activated_on': '',
+                      'source': '仅供合成测试的明确实名关联依据'},
+             'expected_version': detail['version']}, client=self.owner)
+        self.assertEqual(status, 200, preview)
+        status, result, _ = self.apply_preview(preview)
+        self.assertEqual(status, 200, result)
+        with app.connect() as db:
+            baseline = {table: [tuple(row) for row in db.execute('SELECT * FROM ' + table)]
+                        for table in ('accounts', 'phone_cards', 'auth_users', 'daily')}
+        with patch.object(app.operations, 'snapshot', side_effect=AssertionError('full board forbidden')):
+            status, listed, headers = self.call(
+                '/api/employee-cards?view=cards&operator_id=minsheng&card_state=closed&query=13800000999',
+                client=self.owner)
+            detail_status, detail, _ = self.call(route + '&operator_id=minsheng', client=self.owner)
+        self.assertEqual(status, 200, listed)
+        self.assertEqual(headers['Cache-Control'], 'no-store')
+        self.assertEqual(listed['total'], 1)
+        self.assertEqual(listed['employees'][0]['card_ledger']['closed'], 1)
+        self.assertEqual(listed['employees'][0]['card_ledger']['unclosed'], 0)
+        self.assertEqual(detail_status, 200)
+        self.assertEqual(detail['linked_cards'][0]['card_status'], '已注销')
+        self.assertEqual(detail['linked_cards'][0]['phone'], '13800000999')
+        self.assertFalse(detail['linked_cards'][0]['candidate'])
+        self.assertEqual(detail['card_ledger']['registered'], 1)
+        _, excluded, _ = self.call('/api/employee-cards?view=cards&card_state=unclosed', client=self.owner)
+        self.assertEqual(excluded['total'], 0)
+        with app.connect() as db:
+            for table, rows in baseline.items():
+                self.assertEqual([tuple(row) for row in db.execute('SELECT * FROM ' + table)], rows)
+            db.execute("UPDATE phone_cards SET status='正常' WHERE id=?", (card_id,))
+        _, changed, _ = self.call(route, client=self.owner)
+        self.assertEqual(changed['card_ledger']['closed'], 0)
+        self.assertEqual(changed['card_ledger']['unclosed'], 1)
+
+    def test_unknown_card_state_fails_closed_without_full_board(self):
+        status, value, headers = self.call('/api/employee-cards?view=cards&card_state=unsafe', client=self.owner)
+        self.assertEqual(status, 400, value)
+        self.assertEqual(headers['Cache-Control'], 'no-store')
 
     def test_historical_request_generation_failure_is_a_private_conflict_not_500(self):
         error = idempotency.IdempotencyError('RESTORE_GENERATION_EXPIRED', '合成旧代次请求')

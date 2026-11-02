@@ -14,6 +14,7 @@ import auth
 import idempotency
 import office_scope
 import operations
+import employee_card_ledger
 
 TABLES = ('employee_card_employees', 'employee_card_operators', 'employee_card_rules',
           'employee_card_applications', 'employee_card_units', 'employee_card_links',
@@ -305,7 +306,10 @@ def get(db, actor, query, today):
     meta = dict(available=available(db), today=today, user={k: actor[k] for k in ('id', 'name', 'role', 'csrf')},
                 can_manage=_manager(actor), can_configure_rules=actor['role'] == 'owner',
                 can_view_birth_date=_manager(actor), operators=[], employees=[], summaries=[],
-                total=0, page=1, page_size=50, offices=[] , staff_candidates=[])
+                total=0, page=1, page_size=50, offices=[] , staff_candidates=[],
+                card_ledger_filter_incomplete=False,
+                card_ledger_totals=dict({key: None for key in employee_card_ledger.COUNTS},
+                                        scope_complete=False, scope_label='员工卡台账尚未读取'))
     if not meta['available']:
         return dict(meta, message='员工办卡结构升级尚未完成，原手机卡功能可继续使用')
     if 'request_id' in query:
@@ -324,10 +328,17 @@ def get(db, actor, query, today):
     if actor['role'] == 'owner':
         meta['staff_candidates'] = [dict(r) for r in db.execute('SELECT id,name FROM auth_users WHERE active=1 ORDER BY id')]
     ident = _query(query, 'employee_id')
+    operator = _query(query, 'operator_id')
+    card_state = _query(query, 'card_state')
+    if card_state not in ('', 'unclosed', 'closed', 'candidate', 'pending_cancel', 'review'):
+        raise ValueError('手机卡台账状态筛选不正确')
+    complete = {row['id']: not _scope_incomplete(row['id'], bundle, cards_allowed) for row in bundle['employees']}
     if ident:
         employee = _require_employee(db, actor, ident)
-        if _scope_incomplete(ident, bundle, cards_allowed):
+        if not complete[ident]:
             raise auth.AccessError('该员工有关联卡超出当前办公室范围，请全局管理人员核对；未返回卡明细或核验来源', 403)
+        ledger_context = employee_card_ledger.read_context(db, actor, bundle, cards_allowed, {ident})
+        card_ledger, linked_cards = employee_card_ledger.derive(ident, bundle, ledger_context, operator_id=operator)
         version = _version(db, actor, ident, bundle=bundle, scope=scope)
         summary = _summary(employee, bundle, today, cards_allowed)
         units = [dict(r) for r in bundle['units'] if r['employee_id'] == ident]
@@ -335,7 +346,7 @@ def get(db, actor, query, today):
             unit['card_phone'] = ''
             card_id = unit['current_card_id']
             if card_id is not None and (cards_allowed is None or card_id in cards_allowed):
-                row = db.execute('SELECT phone,status FROM phone_cards WHERE id=?', (card_id,)).fetchone()
+                row = ledger_context['cards'].get(card_id)
                 if row:
                     unit['card_phone'], unit['card_status'] = row['phone'], row['status']
             elif card_id is not None:
@@ -348,23 +359,32 @@ def get(db, actor, query, today):
             parameters = (() if cards_allowed is None else tuple(sorted(cards_allowed))) + (card_query, '%' + card_query + '%', card_query)
             candidates = [dict(r) for r in db.execute('SELECT id,phone,carrier,status,owner,keeper FROM phone_cards WHERE ' + restriction + '(?=\'\' OR phone LIKE ? OR CAST(id AS TEXT)=?) ORDER BY id DESC LIMIT 100', parameters)]
         history = [dict(id=r['id'], at=r['at'], action=r['action'], detail=json.loads(r['detail'])) for r in db.execute('SELECT * FROM employee_card_events WHERE employee_id=? ORDER BY at DESC,id DESC LIMIT 100', (ident,))]
-        return dict(meta, employee=dict(_public_employee(employee, birth=True), version=version),
+        return dict(meta, employee=dict(_public_employee(employee, birth=True), version=version, card_ledger=card_ledger),
                     summary=summary, units=units, verifications=[r for r in bundle['verifications'] if r['employee_id'] == ident],
                     applications=[r for r in bundle['applications'] if r['employee_id'] == ident],
                     history=history, card_candidates=candidates,
                     card_links=[r for r in bundle['links'] if r['employee_id'] == ident],
+                    linked_cards=linked_cards, card_ledger=card_ledger, card_ledger_totals=card_ledger,
                     version=version, can_view_birth_date=True)
+    ledger_context = employee_card_ledger.read_context(db, actor, bundle, cards_allowed,
+                                                       {employee_id for employee_id, value in complete.items() if value})
     rows = []
+    linked_by_employee = {}
     for employee in bundle['employees']:
         summary = _summary(employee, bundle, today, cards_allowed)
-        rows.append(dict(_public_employee(employee), summary=summary, version=_version(db, actor, employee['id'], bundle=bundle, scope=scope)))
+        ledger, linked = employee_card_ledger.derive(employee['id'], bundle, ledger_context,
+                                                    operator_id=operator, scope_complete=complete[employee['id']])
+        linked_by_employee[employee['id']] = linked
+        rows.append(dict(_public_employee(employee), summary=summary, card_ledger=ledger,
+                         version=_version(db, actor, employee['id'], bundle=bundle, scope=scope)))
     text = _query(query, 'query').strip().casefold()
-    operator = _query(query, 'operator_id')
     status = _query(query, 'status')
     office = _query(query, 'office_id')
     employment = _query(query, 'employment')
     followup = _query(query, 'followup')
-    rows = [r for r in rows if (not text or text in (r['name'] + ' ' + r['employee_no']).casefold())
+    cards_view = _query(query, 'view') == 'cards'
+    rows = [r for r in rows if (not text or text in (r['name'] + ' ' + r['employee_no']).casefold()
+                               or any(text in (card['phone_snapshot'] + ' ' + card['phone']).casefold() for card in linked_by_employee[r['id']]))
             and (not office or r['office_id'] == office) and (not employment or r['employment_status'] == employment)
             and any((not operator or op['operator_id'] == operator) and (not status or op['status'] == status)
                     for op in r['summary']['operators'])
@@ -372,6 +392,12 @@ def get(db, actor, query, today):
                  or followup == 'due' and any(op.get('next_followup_on') and op['next_followup_on'] <= today for op in r['summary']['operators'])
                  or followup == 'scheduled' and bool(r['summary'].get('next_followup_on'))
                  or followup == 'unscheduled' and not r['summary'].get('next_followup_on'))]
+    # Do not turn an unresolved card match into a confirmed zero when a card
+    # predicate excludes the row. Non-card employee filters still apply first.
+    filter_incomplete = any(not row['card_ledger']['scope_complete'] for row in rows)
+    rows = [row for row in rows
+            if (not cards_view or status or not operator or bool(row['card_ledger']['registered']))
+            and employee_card_ledger.matches(row['card_ledger'], card_state)]
     try:
         page, size = int(_query(query, 'page', '1')), int(_query(query, 'page_size', '50'))
     except ValueError:
@@ -391,7 +417,15 @@ def get(db, actor, query, today):
                               eligible=sum(v['status'] == 'eligible' for v in values),
                               ineligible=sum(v['status'] == 'ineligible' for v in values),
                               needs_verification=sum(v['status'] == 'needs_verification' for v in values)))
+    scope_label = (rows[0]['card_ledger']['scope_label'] if rows else '当前登记运营商范围内的已关联卡（含历史补换卡）')
+    ledger_totals = employee_card_ledger.aggregate([row['card_ledger'] for row in rows],
+                                                 '当前员工筛选结果 · ' + scope_label)
+    if filter_incomplete:
+        ledger_totals = dict({key: None for key in employee_card_ledger.COUNTS}, scope_complete=False,
+                             scope_label='部分关联卡范围不完整，当前卡筛选匹配及合计待核对')
     return dict(meta, employees=rows[(page - 1) * size:page * size], summaries=summaries,
+                card_ledger_totals=ledger_totals,
+                card_ledger_filter_incomplete=filter_incomplete,
                 total=len(rows), page=page, page_size=size)
 
 
@@ -631,10 +665,10 @@ def _execute(db, actor, plan, today):
             db.execute('UPDATE employee_card_units SET current_card_id=?,revision=revision+1 WHERE id=?', (card['id'], ident))
         else:
             op = _operator(db, data.get('operator_id', unit['operator_id'] if unit else ''))
-            activated = _day(data.get('activated_on', ''), '办理日期', latest=today)
+            activated = _day(data.get('activated_on', ''), '办理日期', optional=True, latest=today)
             network_policy = _json(_network_policy(op, activated, today))
             if unit:
-                if unit['phase'] != 'pending' or unit['operator_id'] != op['id'] or activated < unit['requested_on']:
+                if unit['phase'] != 'pending' or unit['operator_id'] != op['id'] or activated and activated < unit['requested_on']:
                     raise ValueError('请将同一运营商的未完成在途单元关联到实际办卡结果')
                 ident = unit['id']
                 db.execute('UPDATE employee_card_units SET phase=?,activated_on=?,current_card_id=?,source=?,network_policy=?,revision=revision+1 WHERE id=?', ('active', activated, card['id'], source, network_policy, ident))
