@@ -21,6 +21,7 @@ import collection
 import account_lifecycle
 import backup
 import phone_cards
+import employee_cards
 import phone_devices
 import device_workflow
 import auth
@@ -172,6 +173,7 @@ def initialize():
         operations.migrate(db)
         nurture.migrate(db)
         device_workflow.migrate(db)
+        employee_cards.migrate(db)
         nurture.sync(db,today())
         # Collection is disabled; retained task states are historical, not executable leases.
 
@@ -290,7 +292,7 @@ class Handler(SimpleHTTPRequestHandler):
         headers=list(headers or [])
         coding=None
         if (status==200 and getattr(self,'command','GET')=='GET'
-                and urlparse(getattr(self,'path','')).path=='/api/board'
+                and urlparse(getattr(self,'path','')).path in ('/api/board', '/api/employee-cards')
                 and not any(key.lower()=='content-encoding' for key,_ in headers)):
             request_headers=getattr(self,'headers',{})
             encoding_values=request_headers.get_all('Accept-Encoding') if hasattr(request_headers,'get_all') else None
@@ -358,6 +360,15 @@ class Handler(SimpleHTTPRequestHandler):
         parsed = urlparse(self.path)
         if parsed.path.startswith('/api/collection/') and parsed.path != '/api/collection/status':
             return self.reply({'error': COLLECTION_MESSAGE, 'code': 'COLLECTION_DISABLED'}, 503)
+        if parsed.path=='/api/employee-cards':
+            try:
+                with connect() as db:
+                    begin_read(db)
+                    actor=auth.session(db,self.headers.get('Cookie'));auth.require(actor)
+                    return self.reply(employee_cards.get(db,actor,parse_qs(parsed.query),today()),include_versions=False)
+            except auth.AccessError as error:return self.reply({'error':str(error)},error.status,include_versions=False)
+            except idempotency.IdempotencyError as error:return self.reply({'error':str(error),'code':error.code},error.status,include_versions=False)
+            except (ValueError,KeyError) as error:return self.reply({'error':str(error)},400,include_versions=False)
         if parsed.path=='/api/nurture/image':
             with connect() as db:
                 begin_read(db)
@@ -806,6 +817,11 @@ class Handler(SimpleHTTPRequestHandler):
                     if self.path=='/api/account/patch' and 'return_account' in body:
                         if type(body['return_account']) is not bool:raise ValueError('账号回执选项必须为布尔值')
                         if body['return_account'] and set(body.get('changes',{}))-{'name','status','note'}:raise ValueError('行内编辑仅支持昵称、状态和备注')
+                if self.path in ('/api/employee-cards/preview','/api/employee-cards/apply'):
+                    action=employee_cards.preview if self.path.endswith('/preview') else employee_cards.apply
+                    result=action(db,actor,body,today())
+                    db.commit()
+                    return self.reply(result,include_versions=False)
                 if self.path=='/api/device-workflow':
                     idempotency.request_uuid(body.get('request_id'))
                     if getattr(db,'restore_generation',None):

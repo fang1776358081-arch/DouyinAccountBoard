@@ -216,4 +216,20 @@ check('source-only package includes both theme stylesheets', () => {
   for (const name of ['console-theme.css', 'login-theme.css']) assert.equal(allowlist.filter(item => item === name).length, 1);
 });
 
+check('employee card entry reuses the shared shell and only local versioned assets', () => {
+  const current = page('employee-cards.html');
+  assert.ok(hasClass(current.elements.find(tag => tag.name === 'body'), 'console-page'));
+  assert.equal(current.elements.filter(tag => hasClass(tag, 'nav-group')).length, 3);
+  assert.equal(current.scripts.length, 1);
+  assert.equal(asset(current.scripts[0].attributes.src), 'employee-cards.js');
+  assert.ok(current.styles.some(tag => asset(tag.attributes.href) === 'console-theme.css'));
+  assert.equal(asset(current.styles.at(-1).attributes.href), 'employee-cards.css');
+  for (const tag of current.styles) asset(tag.attributes.href);
+  for (const tag of current.elements)
+    assert.ok(!Object.keys(tag.attributes).some(key => /^on[a-z]+$/.test(key)));
+  for (const original of consoles)
+    assert.equal(original.elements.filter(tag => tag.name === 'a' && tag.attributes.href === '/employee-cards.html').length, 1);
+  assert.ok(current.elements.some(tag => tag.name === 'a' && tag.attributes.href === '/employee-cards.html' && hasClass(tag, 'active')));
+});
+
 console.log('PASS: ' + completed + ' console/login theme contracts (source-only; no browser/network/DB)');

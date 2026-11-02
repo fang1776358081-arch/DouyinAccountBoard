@@ -17,7 +17,9 @@ publishing-pending.css publishing-pending.js styles.css users.css users.html use
 verification.css verification.js scope-ui.js workspace-model.js workspace-shortcuts.js workspace.css
 workspace.html workspace.js office-three-import.js device-workflow.js device-workflow.css
 account-review.js account-workspace.js account-workspace.css account-inline.js account-inline.css card-filters.js card-filters.css card-page.js card-details.js card-console.css board-updates.js live-sync.js live-sync.css'''.split()
-FILES = tuple(PYTHON_FILES + ['static/' + name for name in STATIC_FILES])
+PYTHON_FILES += ['employee_cards.py','employee_card_rules.py']
+STATIC_FILES += ['employee-cards.html','employee-cards.js','employee-cards.css']
+FILES = tuple(PYTHON_FILES + ['static/' + name for name in STATIC_FILES] + ['migrations/postgresql/0005_employee_cards.sql'])
 
 
 def build(destination):

@@ -294,6 +294,11 @@ def require_stored_action(user, path):
 
 
 def authorize_route(db,user,path,body):
+    if path in ('/api/employee-cards/preview','/api/employee-cards/apply'):
+        # The service independently rechecks employee/card scope and owner-only
+        # configuration. These routes never mutate the legacy card record.
+        require(user,'card_manage')
+        return
     if path=='/api/device-workflow':
         import device_workflow
         device_workflow.authorize(db,user,body)

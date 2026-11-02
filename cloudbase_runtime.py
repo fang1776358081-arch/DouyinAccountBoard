@@ -9,7 +9,7 @@ import threading
 import psycopg
 from psycopg import sql
 from pg_service_adapter import ServiceConnection
-from pg_schema import expected_versions
+from pg_schema import expected_versions, runtime_versions_supported
 
 SCHEMA = 'board_candidate'
 ALLOWED_SSL = frozenset({'require', 'verify-ca', 'verify-full'})
@@ -102,7 +102,7 @@ class CloudBaseRuntime:
         with connect_database(self._environment) as connection:
             connection.execute(sql.SQL('SET search_path={},pg_catalog').format(sql.Identifier(SCHEMA)))
             rows = [tuple(row) for row in connection.execute('SELECT version,sha256 FROM schema_migrations ORDER BY version')]
-            if rows != expected_versions():
+            if not runtime_versions_supported(rows):
                 raise ValueError('云上结构未按单独迁移准备好，启动不会自动建表')
             if not connection.execute("SELECT 1 FROM auth_users WHERE role='owner'").fetchone():
                 raise ValueError('云上还没有总管理员，启动不会自动创建')

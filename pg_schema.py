@@ -3,11 +3,23 @@ import hashlib
 from pathlib import Path
 
 MIGRATIONS = Path(__file__).resolve().parent / 'migrations/postgresql'
-FILES = ('0001_legacy_baseline.sql', '0002_office_scope.sql', '0003_idempotency.sql', '0004_device_workflow.sql')
+FILES = ('0001_legacy_baseline.sql', '0002_office_scope.sql', '0003_idempotency.sql', '0004_device_workflow.sql',
+         '0005_employee_cards.sql')
 
 
 def expected_versions():
     return [(index, hashlib.sha256((MIGRATIONS / name).read_bytes()).hexdigest()) for index, name in enumerate(FILES, 1)]
+
+
+def runtime_versions_supported(rows):
+    """Only reviewed complete v4/v5 schemas; v4 keeps the new module disabled.
+
+    The employee-card extension is explicitly optional for this staged release.
+    Every older hash still has to match. Unknown, partial or drifted schemas
+    remain rejected; startup never applies a migration.
+    """
+    expected = expected_versions()
+    return list(rows) in (expected[:4], expected)
 
 
 def apply_migrations(connection):
