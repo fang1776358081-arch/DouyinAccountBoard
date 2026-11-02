@@ -10,7 +10,7 @@ from psycopg import sql
 from pg_service_adapter import ServiceConnection
 from sql_dialect import AdmissionRejected
 from test_isolation import checked_root
-from pg_schema import expected_versions, runtime_versions_supported
+from pg_schema import expected_versions, runtime_versions_supported, validate_extensions
 
 
 class PostgresRuntime:
@@ -73,6 +73,7 @@ class PostgresRuntime:
             rows = [tuple(row.values) for row in db.execute('SELECT version,sha256 FROM schema_migrations ORDER BY version')]
             if not runtime_versions_supported(rows):
                 raise ValueError('Schema version does not match the reviewed runtime')
+            validate_extensions(db, rows)
             if not db.execute("SELECT 1 FROM auth_users WHERE role='owner'").fetchone():
                 raise ValueError('Controlled owner initialization is required before startup')
             if not db.execute('SELECT 1 FROM runtime_control WHERE id=1').fetchone():

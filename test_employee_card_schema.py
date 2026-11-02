@@ -18,19 +18,20 @@ class EmployeeCardSchemaTest(unittest.TestCase):
         for name, digest in expected.items():
             self.assertEqual(hashlib.sha256((pg_schema.MIGRATIONS / name).read_bytes()).hexdigest(), digest)
 
-    def test_only_complete_reviewed_v4_or_v5_can_start(self):
+    def test_only_complete_reviewed_v4_v5_or_v6_can_start(self):
         expected = pg_schema.expected_versions()
-        self.assertEqual(len(expected), 5)
+        self.assertEqual(len(expected), 6)
         self.assertTrue(pg_schema.runtime_versions_supported(expected[:4]))
+        self.assertTrue(pg_schema.runtime_versions_supported(expected[:5]))
         self.assertTrue(pg_schema.runtime_versions_supported(expected))
         for invalid in ([], expected[:3], expected[:4] + [(5, 'unreviewed')],
-                        expected + [(6, 'unknown')], list(reversed(expected)),
+                        expected + [(7, 'unknown')], list(reversed(expected)),
                         expected[:2] + expected[3:], [(1, 'drifted')] + expected[1:4]):
             with self.subTest(invalid=invalid):
                 self.assertFalse(pg_schema.runtime_versions_supported(invalid))
 
     def test_new_migration_has_no_legacy_data_or_permission_mutation(self):
-        sql = (pg_schema.MIGRATIONS / pg_schema.FILES[-1]).read_text(encoding='utf-8')
+        sql = (pg_schema.MIGRATIONS / pg_schema.FILES[4]).read_text(encoding='utf-8')
         sql = re.sub(r'--[^\n]*', '', sql)
         self.assertNotRegex(sql, r'(?i)\b(?:DROP|TRUNCATE|GRANT|REVOKE|ALTER)\s')
         touched = re.findall(r'(?i)\b(?:CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+([a-z_]+)', sql)

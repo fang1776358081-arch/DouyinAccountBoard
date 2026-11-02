@@ -4,7 +4,7 @@ from pathlib import Path
 
 MIGRATIONS = Path(__file__).resolve().parent / 'migrations/postgresql'
 FILES = ('0001_legacy_baseline.sql', '0002_office_scope.sql', '0003_idempotency.sql', '0004_device_workflow.sql',
-         '0005_employee_cards.sql')
+         '0005_employee_cards.sql', '0006_publish_review.sql')
 
 
 def expected_versions():
@@ -12,14 +12,26 @@ def expected_versions():
 
 
 def runtime_versions_supported(rows):
-    """Only reviewed complete v4/v5 schemas; v4 keeps the new module disabled.
+    """Complete reviewed v4/v5/v6 schemas only; extensions stay disabled until applied.
 
-    The employee-card extension is explicitly optional for this staged release.
-    Every older hash still has to match. Unknown, partial or drifted schemas
-    remain rejected; startup never applies a migration.
+    Hashes of every installed migration must match. Startup never applies DDL.
     """
     expected = expected_versions()
-    return list(rows) in (expected[:4], expected)
+    return list(rows) in (expected[:4], expected[:5], expected)
+
+
+def validate_extensions(db, rows):
+    """Fail startup if a recorded extension lacks its reviewed tables."""
+    installed = len(rows)
+    if installed >= 5:
+        import employee_cards
+        if not employee_cards.available(db):
+            raise ValueError('Employee-card schema incomplete')
+    if installed >= 6:
+        import publish_review
+        if not publish_review.available(db):
+            raise ValueError('Publish-review schema incomplete')
+
 
 
 def apply_migrations(connection):

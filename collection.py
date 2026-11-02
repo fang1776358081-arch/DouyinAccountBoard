@@ -2,6 +2,7 @@
 import re
 import secrets
 import time
+import hashlib
 from release_policy import require_collection, COLLECTION_MESSAGE
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlparse
@@ -79,6 +80,7 @@ def complete(db,body):
     if job['homepage']!=job['current_homepage'] or job['douyin_id']!=job['current_douyin_id']:
         db.execute("UPDATE collection_jobs SET state='done' WHERE account_id=? AND token=?",(job['account_id'],job['token']))
         db.execute("UPDATE accounts SET collection_state='采集失败',collection_error='采集期间账号标识发生变化，请重新采集' WHERE id=?",(job['account_id'],))
+        retain_sample(db,job,body,None,True)
         return dict(ignored=True)
     count=body.get('count');error=str(body.get('error',''))[:400];blocked=bool(body.get('blocked'))
     if error:
@@ -100,8 +102,18 @@ def complete(db,body):
         elif body.get('matched_douyin_id')!=job['douyin_id']:
             raise ValueError('搜索结果与真实抖音号不一致')
         db.execute("UPDATE accounts SET homepage=?,work_count=?,last_collected=?,collection_state='采集成功',collection_error='' WHERE id=?",(source,count,timestamp(),job['account_id']))
+    retain_sample(db,job,body,count if not error else None,bool(error))
     db.execute("UPDATE collection_jobs SET state='done' WHERE account_id=? AND token=?",(job['account_id'],job['token']))
     return dict(ok=True)
+
+
+def retain_sample(db,job,body,count,failed):
+    import publish_review
+    # Old workers supplied no observation time. Keep their old latest-value
+    # behavior; do not invent a historical sample from receipt/upload time.
+    if body.get('sampled_at') and publish_review.available(db):
+        sample_id='collection:'+hashlib.sha256(job['token'].encode()).hexdigest()
+        publish_review.ingest(db,job['account_id'],sample_id,body['sampled_at'],count,failed=failed,source='collection')
 
 def heartbeat(db, status):
     require_collection()

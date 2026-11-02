@@ -10,7 +10,7 @@ from http.cookies import SimpleCookie
 PERMISSIONS={
     'nurture_manage':'管理养号进度及截图',
     'history_view':'查看业务操作历史','data_import':'预览及确认资料导入','data_export':'导出资料与模板',
-    'publishing_manage':'管理发布格子关联',
+    'publishing_manage':'管理发布格子关联及每日目标',
     'publish':'记录当天发布', 'account_status':'修改账号状态',
     'account_progress':'修改注册进度、稳定及改密记录',
     'account_create':'新增抖音账号 / 小号', 'account_manage':'修改账号基础资料',
@@ -31,7 +31,7 @@ PERMISSION_DETAILS={
  'history_view':'查看业务资料修改人、时间及字段前后值；不展示登录密码。',
  'data_import':'上传Excel/CSV并预览差异，确认所选行；实际写入仍需要对应新增、修改及字段权限。',
  'data_export':'导出筛选资料及导入模板，不导出人员密码和登录会话。',
- 'publishing_manage':'关联待匹配发布格子，调整或取消手动关联；不修改账号基础资料、原表文字和历史发布记录。',
+ 'publishing_manage':'关联待匹配发布格子，调整或取消手动关联；设置当日或未来任务目标、任务电脑及截止时间，需填写依据；不能直接改历史目标，不修改账号基础资料、原表文字和历史发布记录。',
  'publish':'勾选或取消当天是否发布，不代表自动操作抖音发布。',
  'account_status':'修改正常、封禁、养号7天等状态，支持批量修改。',
  'account_progress':'修改小号注册进度、账号稳定和改密记录。',
@@ -247,6 +247,7 @@ def save_user(db,actor,body):
 
 
 ACTION_PERMISSIONS={'/api/daily':'publish','/api/bulk-status':'account_status','/api/account/status':'account_status',
+      '/api/publish-review/task':'publishing_manage','/api/publish-review/sample':'collection_manage',
       '/api/publishing/link':'publishing_manage',
       '/api/publishing/assignment':'publishing_manage','/api/account/nurture':'account_status',
       '/api/workspace/import-preview':'data_import','/api/workspace/import-apply':'data_import','/api/workspace/export':'data_export',

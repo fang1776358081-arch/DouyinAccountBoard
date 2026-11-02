@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.request import Request, build_opener, ProxyHandler
 from urllib.error import HTTPError
@@ -82,6 +83,8 @@ class Worker:
         reports=list(folder.glob('*/results.json'))
         row=json.loads(reports[-1].read_text(encoding='utf-8'))['results'][0] if reports else {'status':'failed'}
         body=result_body(job,row)
+        # Capture once, before delivery retries. Server receipt time may be late.
+        body['sampled_at']=datetime.now(timezone.utc).isoformat(timespec='microseconds')
         self.failures=self.failures+1 if body.get('error') else 0
         if self.failures>=3:
             body.update(blocked=True,error=body['error']+'；连续3次失败，队列暂停，请检查后继续')

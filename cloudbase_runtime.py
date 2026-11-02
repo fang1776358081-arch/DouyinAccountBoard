@@ -9,7 +9,7 @@ import threading
 import psycopg
 from psycopg import sql
 from pg_service_adapter import ServiceConnection
-from pg_schema import expected_versions, runtime_versions_supported
+from pg_schema import expected_versions, runtime_versions_supported, validate_extensions
 
 SCHEMA = 'board_candidate'
 ALLOWED_SSL = frozenset({'require', 'verify-ca', 'verify-full'})
@@ -104,6 +104,7 @@ class CloudBaseRuntime:
             rows = [tuple(row) for row in connection.execute('SELECT version,sha256 FROM schema_migrations ORDER BY version')]
             if not runtime_versions_supported(rows):
                 raise ValueError('云上结构未按单独迁移准备好，启动不会自动建表')
+            validate_extensions(ServiceConnection(connection, schema=SCHEMA, scope_enabled=True), rows)
             if not connection.execute("SELECT 1 FROM auth_users WHERE role='owner'").fetchone():
                 raise ValueError('云上还没有总管理员，启动不会自动创建')
             control = connection.execute('SELECT mode,writer_epoch,restore_generation FROM runtime_control WHERE id=1').fetchone()

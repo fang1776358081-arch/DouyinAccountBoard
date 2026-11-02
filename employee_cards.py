@@ -100,8 +100,8 @@ def _table(db, name):
 def available(db):
     if getattr(db, 'dialect', 'sqlite') == 'postgresql':
         import pg_schema
-        expected = pg_schema.expected_versions()[-1]
-        if expected[0] != 5:
+        expected = next((item for item in pg_schema.expected_versions() if item[0] == 5), None)
+        if expected is None:
             return False
         row = db.execute('SELECT version,sha256 FROM schema_migrations WHERE version=5').fetchone()
         if not row or (row[0], row[1]) != expected:

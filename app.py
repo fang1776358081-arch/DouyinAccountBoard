@@ -18,6 +18,7 @@ import json_transport
 import account_transport
 import heavy_work
 import collection
+import publish_review
 import account_lifecycle
 import backup
 import phone_cards
@@ -174,6 +175,7 @@ def initialize():
         nurture.migrate(db)
         device_workflow.migrate(db)
         employee_cards.migrate(db)
+        publish_review.migrate(db)
         nurture.sync(db,today())
         # Collection is disabled; retained task states are historical, not executable leases.
 
@@ -292,7 +294,7 @@ class Handler(SimpleHTTPRequestHandler):
         headers=list(headers or [])
         coding=None
         if (status==200 and getattr(self,'command','GET')=='GET'
-                and urlparse(getattr(self,'path','')).path in ('/api/board', '/api/employee-cards')
+                and urlparse(getattr(self,'path','')).path in ('/api/board','/api/employee-cards','/api/publish-review')
                 and not any(key.lower()=='content-encoding' for key,_ in headers)):
             request_headers=getattr(self,'headers',{})
             encoding_values=request_headers.get_all('Accept-Encoding') if hasattr(request_headers,'get_all') else None
@@ -358,6 +360,14 @@ class Handler(SimpleHTTPRequestHandler):
     def get_response(self):
         self._board_timing=None
         parsed = urlparse(self.path)
+        if parsed.path=='/api/publish-review':
+            with connect() as db:
+                begin_read(db)
+                actor=auth.session(db,self.headers.get('Cookie'));auth.require(actor)
+                if not publish_review.available(db):return self.reply({'error':'发布核对的数据结构尚未升级；现有页面仍可使用','code':'PUBLISH_REVIEW_SCHEMA_REQUIRED'},503)
+                try:result=publish_review.overview(db,actor,{key:values[-1] for key,values in parse_qs(parsed.query).items()})
+                except ValueError as error:return self.reply({'error':str(error)},400)
+                return self.reply(result,include_versions=False)
         if parsed.path.startswith('/api/collection/') and parsed.path != '/api/collection/status':
             return self.reply({'error': COLLECTION_MESSAGE, 'code': 'COLLECTION_DISABLED'}, 503)
         if parsed.path=='/api/employee-cards':
@@ -814,6 +824,11 @@ class Handler(SimpleHTTPRequestHandler):
                     actor=auth.session(db,self.headers.get('Cookie'));auth.require(actor)
                     if not auth.hmac.compare_digest(self.headers.get('X-CSRF-Token',''),actor['csrf']):raise auth.AccessError('页面已过期，请刷新后重试')
                     auth.authorize_route(db,actor,self.path,body)
+                    if self.path in ('/api/publish-review/task','/api/publish-review/sample'):
+                        if not publish_review.available(db):return self.reply({'error':'发布核对的数据结构尚未升级','code':'PUBLISH_REVIEW_SCHEMA_REQUIRED'},503)
+                        result=publish_review.post(db,actor,self.path,body)
+                        db.commit()
+                        return self.reply(result,include_versions=False)
                     if self.path=='/api/account/patch' and 'return_account' in body:
                         if type(body['return_account']) is not bool:raise ValueError('账号回执选项必须为布尔值')
                         if body['return_account'] and set(body.get('changes',{}))-{'name','status','note'}:raise ValueError('行内编辑仅支持昵称、状态和备注')

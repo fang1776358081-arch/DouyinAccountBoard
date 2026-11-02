@@ -25,7 +25,8 @@ def source_hashes():
              'migrations/postgresql/0001_legacy_baseline.sql', 'migrations/postgresql/0002_office_scope.sql', 'migrations/postgresql/0003_idempotency.sql', 'migrations/postgresql/legacy-sqlite-schema.json', 'idempotency.py']
     paths+=['pg_browser_checks.py','browser_scope_checks.cjs','employee_cards.py','employee_card_rules.py',
             'employee_card_pg_checks.py','cloudbase_runtime.py','migrations/postgresql/0004_device_workflow.sql',
-            'migrations/postgresql/0005_employee_cards.sql']+['static/'+name for name in STATIC_FILES]
+            'migrations/postgresql/0005_employee_cards.sql','migrations/postgresql/0006_publish_review.sql',
+            'publish_review.py','publish_review_pg_checks.py']+['static/'+name for name in STATIC_FILES]
     return {path: hashlib.sha256((PROJECT / path).read_bytes()).hexdigest() for path in paths}
 
 
@@ -34,6 +35,7 @@ def main():
     parser.add_argument('--root', required=True)
     parser.add_argument('--bin', help='Explicit local PostgreSQL binaries; cluster remains synthetic and loopback-only')
     parser.add_argument('--employee-card-checks', action='store_true')
+    parser.add_argument('--publish-review-checks', action='store_true')
     parser.add_argument('--protocol-checks', action='store_true')
     parser.add_argument('--migration-checks', action='store_true')
     parser.add_argument('--service-checks', action='store_true')
@@ -49,7 +51,7 @@ def main():
     parser.add_argument('--browser-checks', action='store_true')
     parser.add_argument('--role-checks', action='store_true')
     args = parser.parse_args()
-    if sum((args.migration_checks, args.service_checks, args.http_checks, args.admin_checks, args.runtime_checks, args.process_checks, args.cutover_checks, args.schema_checks, args.scope_checks, args.scope_read_checks, args.scope_write_checks, args.browser_checks, args.role_checks, args.employee_card_checks)) > 1:
+    if sum((args.migration_checks, args.service_checks, args.http_checks, args.admin_checks, args.runtime_checks, args.process_checks, args.cutover_checks, args.schema_checks, args.scope_checks, args.scope_read_checks, args.scope_write_checks, args.browser_checks, args.role_checks, args.employee_card_checks, args.publish_review_checks)) > 1:
         parser.error('Migration and service checks each require their own empty candidate schema')
     global BIN
     if args.bin:
@@ -162,6 +164,13 @@ def main():
             if result.returncode:
                 raise RuntimeError(result.stderr.decode('utf-8', errors='replace').replace(password, '[redacted]')[-2500:])
             report['protocol'] = json.loads(result.stdout)
+        if args.publish_review_checks:
+            result = subprocess.run([sys.executable, '-B', str(PROJECT / 'publish_review_pg_checks.py')],
+                                    env=environment, cwd=PROJECT, capture_output=True, timeout=90,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+            if result.returncode:
+                raise RuntimeError(result.stderr.decode('utf-8', errors='replace').replace(password, '[redacted]')[-3500:])
+            report['publish_review'] = json.loads(result.stdout)
         if args.employee_card_checks:
             result = subprocess.run([sys.executable, '-B', str(PROJECT / 'employee_card_pg_checks.py')],
                                     env=environment, cwd=PROJECT, capture_output=True, timeout=90,
