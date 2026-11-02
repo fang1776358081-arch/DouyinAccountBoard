@@ -132,8 +132,64 @@ def main():
         db.execute("INSERT INTO computers(id,name) VALUES('synthetic-pc','合成电脑')")
         db.execute("INSERT INTO accounts(id,computer_id,slot,name,douyin_id,status) VALUES('synthetic-account','synthetic-pc',1,'合成账号','000123456','正常')")
         db.execute("INSERT INTO auth_users(username,name,role,password_hash,created_at) VALUES('synthetic-admin','合成管理员','owner','synthetic-only-value-never-printed',1)")
+        # Fresh service connections do not inherit the fixture setup search_path.
+        db.execute('SET search_path=public')
         initial = upgrade.snapshot(db)
         original = upgrade.control(db)
+
+        def pending_marker(payload=None, receipt_value=None):
+            directory = root/('douyin-board-v6-'+uuid4().hex)
+            directory.mkdir()
+            marker = root/'douyin-board-publish-review-v6.pending'
+            marker.write_text(json.dumps(payload or dict(receipt=str(directory/'receipt.json'))),encoding='utf-8')
+            if receipt_value is not None:
+                (directory/'receipt.json').write_text(json.dumps(receipt_value),encoding='utf-8')
+            return marker,directory
+
+        marker,directory=pending_marker()
+        db.execute('SET search_path=public')
+        upgrade.resolve_preflight(db,marker)
+        assert not marker.exists() and (directory/'preflight-marker-resolved.json').is_file()
+        assert (directory/'preflight-resolution.json').is_file()
+        assert upgrade.control(db)==original and upgrade.snapshot(db)==initial
+        checks.append('empty-preflight-marker-archived-only-after-proving-v5-open-no-database-changes')
+
+        marker,directory=pending_marker(receipt_value=dict(status='maintenance'))
+        try:
+            upgrade.resolve_preflight(db,marker)
+            raise AssertionError('Receipt-bearing attempt was cleared')
+        except upgrade.UpgradeStop as error:assert str(error)=='PENDING_ATTEMPT_HAS_RECEIPT_OR_FILES'
+        assert marker.exists()
+        marker.rename(directory/'rejected-marker.json')
+        marker,directory=pending_marker(dict(receipt=str(root.parent/'unrelated/receipt.json')))
+        try:
+            upgrade.resolve_preflight(db,marker)
+            raise AssertionError('Unrelated pending path was moved')
+        except upgrade.UpgradeStop as error:assert str(error)=='UNSAFE_PENDING_PATH'
+        assert marker.exists()
+        marker.rename(directory/'rejected-marker.json')
+        marker,directory=pending_marker()
+        db.execute("UPDATE board_candidate.runtime_control SET mode='maintenance'")
+        try:
+            upgrade.resolve_preflight(db,marker)
+            raise AssertionError('Maintenance attempt was cleared')
+        except upgrade.UpgradeStop as error:assert str(error)=='PENDING_DATABASE_NOT_UNCHANGED_V5_OPEN'
+        assert marker.exists() and upgrade.control(db)[0]=='maintenance'
+        marker.rename(directory/'rejected-marker.json')
+        db.execute("UPDATE board_candidate.runtime_control SET mode='open'")
+        marker,directory=pending_marker()
+        db.execute('CREATE VIEW board_candidate.publish_review_samples AS SELECT 1 AS synthetic')
+        try:
+            upgrade.resolve_preflight(db,marker)
+            raise AssertionError('Partial v6 attempt was cleared')
+        except upgrade.UpgradeStop as error:assert str(error)=='PENDING_HAS_PARTIAL_V6'
+        assert marker.exists()
+        marker.rename(directory/'rejected-marker.json')
+        db.execute('DROP VIEW board_candidate.publish_review_samples')
+        checks.append('pending-resolution-refuses-real-receipts-unrelated-path-maintenance-and-partial-v6')
+
+        # The production regression: a fresh raw connection starts in public.
+        db.execute('SET search_path=public')
 
         # A failed backup must never reach DDL; original mode/timer are recovered.
         ops, path = Ops(), folder()
@@ -184,6 +240,7 @@ def main():
 
         # Same schema and real client versions as production, all data synthetic.
         ops, path = Ops(), folder()
+        db.execute('SET search_path=public')
         result=upgrade.upgrade(db,path,settings,dump,restore,ops,lambda: None)
         assert result['status']=='complete' and upgrade.versions(db)==expected
         assert upgrade.control(db)==original and not ops.paused and ops.restarts==1
@@ -194,6 +251,16 @@ def main():
         text=(path/'receipt.json').read_text(encoding='utf-8')
         assert settings['password'] not in text and 'synthetic-only-value-never-printed' not in text
         checks.append('real-v5-to-v6-four-empty-tables-old-records-grants-identities-control-preserved')
+        checks.append('fresh-public-search-path-initializes-business-schema-before-extension-queries')
+
+        marker,directory=pending_marker()
+        try:
+            upgrade.resolve_preflight(db,marker)
+            raise AssertionError('Committed v6 was treated as an empty v5 preflight')
+        except upgrade.UpgradeStop as error:assert str(error)=='PENDING_DATABASE_NOT_UNCHANGED_V5_OPEN'
+        assert marker.exists() and upgrade.versions(db)==expected
+        marker.rename(directory/'rejected-marker.json')
+        checks.append('preflight-resolution-never-rewinds-or-clears-a-committed-v6')
 
         # Restore this actual pre-upgrade archive to a second disposable database.
         db.execute('CREATE DATABASE synthetic_upgrade_restore TEMPLATE template0')

@@ -106,6 +106,56 @@ def old_unchanged(before, after):
             and all(row in after['relations'] for row in before['relations']))
 
 
+def resolve_preflight(db, pending):
+    """Archive only an empty, pre-maintenance attempt, after proving live v5/open.
+
+    This never clears a receipt-bearing attempt, changes mode, restarts services,
+    deletes a backup, or rolls a committed schema backward.
+    """
+    import pg_schema
+    import stat
+    from pg_service_adapter import ServiceConnection
+    pending = Path(pending)
+    check(pending.name == 'douyin-board-publish-review-v6.pending'
+          and pending.is_file() and not pending.is_symlink(), 'INVALID_PENDING_MARKER')
+    marker = json.loads(pending.read_text(encoding='utf-8'))
+    check(isinstance(marker,dict) and set(marker) == {'receipt'}, 'UNKNOWN_PENDING_FORMAT')
+    receipt = Path(marker['receipt'])
+    folder = receipt.parent
+    check(receipt.name == 'receipt.json' and folder.parent == pending.parent
+          and re.fullmatch(r'douyin-board-v6-[A-Za-z0-9_-]{6,64}', folder.name)
+          and folder.is_dir() and not folder.is_symlink() and folder.resolve() == folder,
+          'UNSAFE_PENDING_PATH')
+    check(not any(folder.iterdir()), 'PENDING_ATTEMPT_HAS_RECEIPT_OR_FILES')
+    if os.name == 'posix':
+        file_info, dir_info = pending.stat(), folder.stat()
+        check(stat.S_ISREG(file_info.st_mode) and file_info.st_uid == dir_info.st_uid == 0
+              and file_info.st_mode & 0o777 == 0o600 and dir_info.st_mode & 0o777 == 0o700,
+              'PENDING_NOT_PRIVATE')
+    db.execute('SET search_path=board_candidate,pg_catalog')
+    expected = pg_schema.expected_versions()
+    check(len(expected) == 6, 'UNEXPECTED_MIGRATION_LIST')
+    check(db.execute('SELECT pg_try_advisory_lock(%s)', (LOCK,)).fetchone()[0], 'OTHER_MIGRATION_RUNNING')
+    try:
+        with db.transaction():
+            db.execute('SET TRANSACTION READ ONLY')
+            check(versions(db) == expected[:5] and control(db)[0] == 'open', 'PENDING_DATABASE_NOT_UNCHANGED_V5_OPEN')
+            pg_schema.validate_extensions(ServiceConnection(db, schema=SCHEMA, scope_enabled=True), expected[:5])
+            check(not any(db.execute('SELECT to_regclass(%s)', (SCHEMA+'.'+name,)).fetchone()[0]
+                          for name in NEW_TABLES+NEW_INDEXES), 'PENDING_HAS_PARTIAL_V6')
+        destination = folder/'preflight-marker-resolved.json'
+        check(not destination.exists(), 'PENDING_ARCHIVE_EXISTS')
+        pending.rename(destination)
+        with (folder/'preflight-resolution.json').open('x', encoding='utf-8') as output:
+            json.dump(dict(status='preflight-never-started', schema_version=5, mode='open',
+                           database_changed=False, marker_archived=str(destination),
+                           resolved_utc=datetime.now(timezone.utc).isoformat()), output, indent=2)
+        (folder/'preflight-resolution.json').chmod(0o600)
+        print(json.dumps(dict(phase='preflight-marker-resolved', evidence=str(destination))), flush=True)
+    finally:
+        db.execute('SELECT pg_advisory_unlock(%s)', (LOCK,))
+
+
 def backup(db, settings, folder, dump_bin, restore_bin, before):
     path = Path(folder) / 'before-v6.dump'
     check(not path.exists(), 'BACKUP_ALREADY_EXISTS')
@@ -144,6 +194,9 @@ def backup(db, settings, folder, dump_bin, restore_bin, before):
 def upgrade(db, folder, settings, dump_bin, restore_bin, ops, guard):
     import pg_schema
     from pg_service_adapter import ServiceConnection
+    # A raw connection starts at public; the adapter's schema parameter only
+    # configures writer admission and does not change PostgreSQL search_path.
+    db.execute('SET search_path=board_candidate,pg_catalog')
     expected = pg_schema.expected_versions()
     check(len(expected) == 6, 'UNEXPECTED_MIGRATION_LIST')
     guard()
@@ -289,11 +342,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--expect-commit', required=True)
     parser.add_argument('--execute', action='store_true')
+    parser.add_argument('--resolve-preflight', action='store_true',
+                        help='Archive a provably empty v5/open preflight marker before the upgrade')
     args = parser.parse_args()
     check(sys.platform == 'linux' and os.geteuid() == 0 and ROOT == Path('/opt/douyin-board'), 'RUN_ONLY_ON_REVIEWED_SERVER_AS_ROOT')
     check(re.fullmatch(r'[0-9a-f]{40}', args.expect_commit), 'EXACT_COMMIT_REQUIRED')
     pending = Path('/root/douyin-board-publish-review-v6.pending')
-    check(not pending.exists(), 'UNRESOLVED_UPGRADE_RECEIPT_EXISTS')
+    check(not args.resolve_preflight or args.execute, 'PREFLIGHT_RESOLUTION_REQUIRES_EXECUTE')
+    check(not pending.exists() or args.resolve_preflight, 'UNRESOLVED_UPGRADE_RECEIPT_EXISTS')
     owner = pwd.getpwuid(ROOT.stat().st_uid).pw_name
 
     def guard():
@@ -322,6 +378,9 @@ def main():
             check(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0
                   and metadata.st_mode & 0o777 == 0o600, 'PROCESS_LOCK_NOT_PRIVATE')
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if pending.exists():
+                check(args.resolve_preflight, 'UNRESOLVED_UPGRADE_RECEIPT_EXISTS')
+                resolve_preflight(db, pending)
             folder = Path(tempfile.mkdtemp(prefix='douyin-board-v6-', dir='/root'))
             with pending.open('x', encoding='utf-8') as output:
                 json.dump(dict(receipt=str(folder/'receipt.json')), output)
