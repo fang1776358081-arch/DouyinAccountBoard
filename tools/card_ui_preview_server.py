@@ -34,7 +34,10 @@ def main():
     try:
         line = sys.stdin.readline(8 * 1024 * 1024)
         config = json.loads(line)
-        if config['baseline'] != '4597858e258d4d20f3fd83ec5c97eb3bc1ac3be3':
+        baselines = {'cards': '4597858e258d4d20f3fd83ec5c97eb3bc1ac3be3',
+                     'accounts': 'beae5cb3821b660f532a843f71d78f4727948b20'}
+        scenario = config.get('scenario', 'cards')
+        if scenario not in baselines or config['baseline'] != baselines[scenario]:
             raise ValueError('Unexpected frozen baseline')
         candidate = Path(config['candidate'])
         if candidate != PROJECT / 'static' or candidate.resolve() != candidate or candidate.is_symlink() or candidate.is_junction():
@@ -50,8 +53,9 @@ def main():
         board = json.loads(board_bytes)
         if len(board['phone_cards']['cards']) != 120 or len(board['accounts']) != 288:
             raise ValueError('Unexpected synthetic fixture size')
+        inline_accounts = {row['id']: row for row in board['accounts']}
         guard = r"""(()=>{
- const q=new URLSearchParams(location.search),metrics={synthetic:true,boardReadyMs:null,renderMs:null,filterPaintMs:null};
+ const q=new URLSearchParams(location.search),view='__PREVIEW_VIEW__',workspace=view==='accounts'?'#accountWorkspace':'#cardsWorkspace',rowSelector=view==='accounts'?'#accountsBody':'#cardsBody',metrics={synthetic:true,boardReadyMs:null,renderMs:null,filterPaintMs:null};
  if(q.has('preview_delay')||q.has('preview_fail'))localStorage.removeItem('douyin-board-view');
  document.addEventListener('click',e=>{const a=e.target.closest?.('a[href]');if(a&&new URL(a.href,location.href).origin!==location.origin)e.preventDefault();},true);
  const visible=node=>{
@@ -62,13 +66,13 @@ def main():
   return Math.min(right,r.right)>Math.max(left,r.left)&&Math.min(bottom,r.bottom)>Math.max(top,r.top);
  };
  function measure(){
-  const controls=[...document.querySelectorAll('#cardsWorkspace input:not([type=hidden]),#cardsWorkspace select,#cardsWorkspace button')].filter(visible);
+  const controls=[...document.querySelectorAll(workspace+' input:not([type=hidden]),'+workspace+' select,'+workspace+' button')].filter(visible);
   const overlaps=[];for(let i=0;i<controls.length;i++)for(let j=i+1;j<controls.length;j++){
    const a=controls[i],b=controls[j];if(a.contains(b)||b.contains(a))continue;
    const x=a.getBoundingClientRect(),y=b.getBoundingClientRect();
    if(Math.min(x.right,y.right)-Math.max(x.left,y.left)>2&&Math.min(x.bottom,y.bottom)-Math.max(x.top,y.top)>2)overlaps.push([a.id||a.tagName,b.id||b.tagName]);
   }
-  const rows=[...document.querySelectorAll('#cardsBody tr')].filter(node=>node.getClientRects().length>0),height=innerHeight;
+  const rows=[...document.querySelectorAll(rowSelector+' tr')].filter(node=>node.getClientRects().length>0),height=innerHeight;
   const rowVisible=node=>{let top=0,bottom=height;for(let parent=node.parentElement;parent;parent=parent.parentElement){const style=getComputedStyle(parent);if(/auto|scroll|hidden|clip/.test(style.overflowY)){const box=parent.getBoundingClientRect();top=Math.max(top,box.top);bottom=Math.min(bottom,box.bottom);}}
    const table=node.closest('table');if(table)for(const th of table.querySelectorAll('thead th')){const box=th.getBoundingClientRect();if(box.top>=top&&box.top<bottom)top=Math.max(top,box.bottom);}
    const rect=node.getBoundingClientRect();return rect.top>=top-1&&rect.bottom<=bottom+1;
@@ -84,11 +88,11 @@ def main():
  document.addEventListener('DOMContentLoaded',()=>{
   document.documentElement.dataset.previewSynthetic='120 cards / 288 accounts / 2026-11-02';
   const original=window.render;if(typeof original==='function')window.render=function(...args){const start=performance.now();try{return original.apply(this,args);}finally{metrics.renderMs=+(performance.now()-start).toFixed(2);frame();}};
-  const body=document.getElementById('cardsBody');if(body)new MutationObserver(frame).observe(body,{childList:true,subtree:true});frame();
+  const body=document.querySelector(rowSelector);if(body)new MutationObserver(frame).observe(body,{childList:true,subtree:true});frame();
  });
- for(const event of ['input','change'])document.addEventListener(event,e=>{if(e.target.closest?.('#cardsWorkspace'))pendingInput=performance.now();},true);
+ for(const event of ['input','change'])document.addEventListener(event,e=>{if(e.target.closest?.(workspace))pendingInput=performance.now();},true);
  window.addEventListener('resize',frame);window.addEventListener('scroll',frame,{passive:true});
-})();""".encode('utf-8')
+})();""".replace('__PREVIEW_VIEW__', scenario).encode('utf-8')
 
         class PreviewHandler(BaseHTTPRequestHandler):
             def log_message(self, *args):
@@ -132,6 +136,17 @@ def main():
                     if flags.get('preview_fail', [''])[0] == '1':
                         return self.reply({'error': '合成本机加载失败测试；未读取任何真实资料'}, 503)
                     return self.reply(board_bytes)
+                if route == '/api/account/inline' and scenario == 'accounts':
+                    identifiers = parse_qs(parsed.query).get('id', [])
+                    if len(identifiers) != 1:
+                        return self.reply({'error': '请选择一个合成账号'}, 400)
+                    account = inline_accounts.get(identifiers[0])
+                    if account is None:
+                        return self.reply({'error': '合成预览账号不存在'}, 404)
+                    return self.reply({'account': {'id': account['id'], 'name': account['name'],
+                                                  'status': account['status'], 'note': account.get('note') or ''},
+                                       'record_version': board['record_versions']['account:' + account['id']],
+                                       'cursor': board['cursor']})
                 if route == '/api/auth/me':
                     return self.reply({'user': board['user'], 'initialized': True, 'can_setup': False})
                 if route in ('/api/board-updates', '/api/updates'):
@@ -140,7 +155,7 @@ def main():
                     keys = parse_qs(parsed.query).get('keys', [''])[0].split(',')
                     return self.reply({'record_versions': {key: board['record_versions'].get(key) for key in keys if key}})
                 if route == '/__preview__/meta':
-                    return self.reply({'variant': self.server.variant, 'baseline': config['baseline'], 'cards': 120, 'accounts': 288, 'data_sha256': fingerprint, 'writes': False})
+                    return self.reply({'variant': self.server.variant, 'scenario': scenario, 'baseline': config['baseline'], 'cards': 120, 'accounts': 288, 'data_sha256': fingerprint, 'writes': False})
                 if route == '/__preview__/guard.js':
                     return self.reply(guard, mime='text/javascript; charset=utf-8')
                 name = 'index.html' if route == '/' else route.removeprefix('/')
@@ -165,9 +180,9 @@ def main():
             thread.start()
             servers.append(server)
             threads.append(thread)
-        urls = {variant + '_url': 'http://127.0.0.1:' + str(server.server_port) + '/?page=cards' for variant, server in zip(('before', 'after'), servers)}
+        urls = {variant + '_url': 'http://127.0.0.1:' + str(server.server_port) + '/?page=' + scenario for variant, server in zip(('before', 'after'), servers)}
         print(json.dumps({'kind': 'ready', **urls, 'data_sha256': fingerprint, 'cards': 120, 'accounts': 288,
-            'baseline': config['baseline'], 'read_only': True, 'evidence_root': str(root),
+            'scenario': scenario, 'baseline': config['baseline'], 'read_only': True, 'evidence_root': str(root),
             'flags': {'loading': '&preview_delay=2000', 'error': '&preview_fail=1'}}, ensure_ascii=False), flush=True)
         for line in sys.stdin:
             if json.loads(line) == {'command': 'stop'}:

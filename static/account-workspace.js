@@ -22,3 +22,16 @@ function clearAccountFilter(id){
  render();
 }
 document.addEventListener('click',event=>{const button=event.target.closest('[data-clear-account-filter]');if(button)clearAccountFilter(button.dataset.clearAccountFilter);});
+
+// Move existing controls without replacing nodes, listeners or permission flags.
+function activateAccountConsole(active){
+ document.body.classList.toggle('accounts-console',active);
+ const move=(id,enabledHost,home)=>{const node=$(id),host=$(active?enabledHost:home);if(node&&host&&node.parentElement!==host)host.append(node);};
+ move('newAccount','accountsHeaderActions','accountCreateHome');
+ move('refresh','accountListActions','accountToolsHome');
+ move('exportVisibleAccounts','accountListActions','accountToolsHome');
+ move('collectionBar','accountSupplementBody','accountSupplementHome');
+ move('lifecycleSummary','accountSupplementBody','accountSupplementHome');
+ for(const id of ['accountsHeaderActions','accountListActions','accountSupplement']){const node=$(id);if(node)node.hidden=!active;}
+ $('newAccount')?.classList.toggle('primary',active);
+}

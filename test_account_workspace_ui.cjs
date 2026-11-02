@@ -14,6 +14,7 @@ check('common and advanced controls retain unique IDs and native disclosure',()=
  const advanced=html.match(/<details id="accountAdvancedFilters"[\s\S]*?<\/details>/)?.[0];assert.ok(advanced);assert.doesNotMatch(advanced,/<details[^>]*\bopen\b/);
  for(const id of ['accountDeviceQuery','accountPhoneQuery','verificationFilter','loginPhoneFilter','accountType','ageFilter','lifecycleFilter'])assert.ok(advanced.includes('id="'+id+'"'),id);
  for(const id of ['query','accountDouyinQuery','computer','status','published'])assert.ok(html.indexOf('id="'+id+'"')<html.indexOf('id="accountAdvancedFilters"'),id);
+ const supplement=html.match(/<details id="accountSupplement"[\s\S]*?<\/details>/)?.[0];assert.ok(supplement);assert.doesNotMatch(supplement,/<details[^>]*\bopen\b/);
 });
 check('result count covers all filtered accounts while visible rows remain paginated',()=>{
  assert.match(p.element('accountActiveFilters').innerHTML,/筛选结果 <strong>125<\/strong>/);assert.equal(p.rowIds().length,50);
@@ -48,11 +49,31 @@ check('compact rows retain registration, verification, collection and full note 
  assert.match(rows,/data-publish="account-0"/);assert.match(rows,/data-collect="account-0"/);assert.match(rows,/workspace.html\?account=account-0/);
  const header=html.match(/<table class="account-table"><thead><tr>([\s\S]*?)<\/tr><\/thead>/)[1];assert.equal((header.match(/<th[>\s]/g)||[]).length,7);
 });
+check('unselected account toolbar offers page selection without empty bulk actions',()=>{
+ const q=page(),bar=q.element('batchAccountsBar').innerHTML;
+ assert.match(bar,/已选 0 条账号 · 本页 50 条 \/ 筛选共 125 条/);
+ assert.match(bar,/data-batch-all="accounts" data-batch-page="yes"/);
+ assert.doesNotMatch(bar,/data-batch-open|data-batch-clear|选中全部筛选结果/);
+ assert.equal(q.calls.length,0);
+});
 check('one visible account batch bar preserves legacy hooks, page/all scope and collection entry',()=>{
  assert.match(html,/<div class="bulk legacy-account-bulk" hidden aria-hidden="true">/);assert.match(html,/<div class="batch-toolbar account-batch-toolbar">[\s\S]*?id="collectSelected"[\s\S]*?<\/div>/);
  assert.equal((html.match(/id="collectSelected"/g)||[]).length,1);for(const id of ['selectedCount','bulkStatus','applyBulk'])assert.ok(html.includes('id="'+id+'"'));
  p.element('accountsNext').onclick();p.click('[data-batch-all]',{batchAll:'accounts',batchPage:'yes'});assert.equal(p.run('selected.size'),50);assert.match(p.element('batchAccountsBar').innerHTML,/已选 50 条账号 · 本页 50 条 \/ 筛选共 125 条/);
- p.click('[data-batch-all]',{batchAll:'accounts'});assert.equal(p.run('selected.size'),125);p.click('[data-batch-clear]',{batchClear:'accounts'});assert.equal(p.run('selected.size'),0);
+ for(const kind of ['accounts','verification'])assert.match(p.element('batchAccountsBar').innerHTML,new RegExp('data-batch-open="'+kind+'" data-batch-source="accounts"'));
+ p.click('[data-batch-all]',{batchAll:'accounts'});assert.equal(p.run('selected.size'),125);p.click('[data-batch-clear]',{batchClear:'accounts'});assert.equal(p.run('selected.size'),0);assert.doesNotMatch(p.element('batchAccountsBar').innerHTML,/data-batch-open|data-batch-clear/);
+});
+check('account selection is pruned by filters and its toolbar follows the retained scope',()=>{
+ const q=page();q.click('[data-batch-all]',{batchAll:'accounts'});assert.equal(q.run('selected.size'),125);
+ q.element('accountDouyinQuery').value='synthetic-handle-4';q.run('render()');assert.equal(q.run('selected.size'),1);assert.equal(q.run('selected.has("account-4")'),true);
+ assert.match(q.element('batchAccountsBar').innerHTML,/已选 1 条账号 · 本页 1 条 \/ 筛选共 1 条/);
+ q.element('accountDouyinQuery').value='not-a-real-handle';q.run('render()');assert.equal(q.run('selected.size'),0);assert.doesNotMatch(q.element('batchAccountsBar').innerHTML,/data-batch-open/);assert.equal(q.calls.length,0);
+});
+check('selected contextual actions preserve independent field permissions',()=>{
+ const q=page();q.context.hasPermission=permission=>permission==='account_status';q.run("selected.add('account-0');render()");
+ const buttons=q.element('batchAccountsBar').innerHTML.match(/<button[^>]*data-batch-open[^>]*>/g)||[];
+ assert.equal(buttons.length,2);assert.doesNotMatch(buttons.find(button=>button.includes('data-batch-open="accounts"')),/\bdisabled\b/);assert.match(buttons.find(button=>button.includes('data-batch-open="verification"')),/\bdisabled\b/);
+ assert.equal(q.calls.length,0);
 });
 check('read-only permissions keep batch write actions disabled and rendering creates no writes',()=>{
  const b=fixture(3),snapshot=JSON.stringify(b),q=page(b);q.context.hasPermission=()=>false;q.run("selected.add('account-0');render()");

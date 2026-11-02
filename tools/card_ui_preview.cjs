@@ -3,11 +3,12 @@
 const fs=require('node:fs'),path=require('node:path'),http=require('node:http'),crypto=require('node:crypto');
 const {spawn,execFileSync}=require('node:child_process');
 const assert=require('node:assert/strict');
-const ROOT=path.resolve(__dirname,'..'),BASELINE='4597858e258d4d20f3fd83ec5c97eb3bc1ac3be3';
+const ROOT=path.resolve(__dirname,'..'),BASELINES={cards:'4597858e258d4d20f3fd83ec5c97eb3bc1ac3be3',accounts:'beae5cb3821b660f532a843f71d78f4727948b20'};
 const {fixture}=require(path.join(ROOT,'test_performance_ui.cjs'));
 const args=process.argv.slice(2),options={};
-for(let i=0;i<args.length;i++){if(args[i]==='--smoke')options.smoke=true;else if(['--root','--python'].includes(args[i]))options[args[i].slice(2)]=args[++i];else throw Error('Unsupported preview option');}
-assert.ok(options.root&&options.python,'Use --root <new .synthetic-tests child> --python <absolute python.exe> [--smoke]');
+for(let i=0;i<args.length;i++){if(args[i]==='--smoke')options.smoke=true;else if(args[i]==='--accounts')options.accounts=true;else if(['--root','--python'].includes(args[i]))options[args[i].slice(2)]=args[++i];else throw Error('Unsupported preview option');}
+assert.ok(options.root&&options.python,'Use --root <new .synthetic-tests child> --python <absolute python.exe> [--accounts] [--smoke]');
+const scenario=options.accounts?'accounts':'cards',BASELINE=BASELINES[scenario];
 const runRoot=path.resolve(ROOT,options.root),allowedRoot=path.join(ROOT,'.synthetic-tests')+path.sep;
 assert.ok(runRoot.startsWith(allowedRoot)&&runRoot!==allowedRoot.slice(0,-1));
 assert.ok(path.isAbsolute(options.python)&&path.basename(options.python).toLowerCase()==='python.exe');
@@ -21,6 +22,9 @@ function syntheticBoard(){
  const office=i=>i<60?'three':i<90?'one':i<110?'two':'pending';
  board.date=board.today='2026-11-02';
  board.user={id:'synthetic-card-preview-user',username:'synthetic-preview',name:'合成预览人员',role:'owner',scope_mode:'all',office_ids:['one','two','three'],csrf:'synthetic-preview-only',permissions:['card_create','card_import','card_manage','card_tasks','account_progress','device_manage','account_manage','account_status','publish']};
+ // Actual permission keys from auth.py/auth-ui.js; fixture-only, never grants
+ // access to a real service. Keep the original card scenario unchanged.
+ if(options.accounts)board.user.permissions.push('account_create','data_export','nurture_manage');
  board.offices=['one','two','three'].map(id=>({id,name:names[id]}));
  board.phone_cards.statuses=['待确认','正常','欠费','停机','停用','待注销','已注销'];
  board.phone_cards.carriers=['待确认','中国移动','中国联通','中国电信','中国广电','民生电信','长城移动','其他'];
@@ -58,7 +62,7 @@ let buffer='',ready,stopping=false,ended=false;const pending=[];
 child.stdout.setEncoding('utf8');child.stdout.on('data',chunk=>{buffer+=chunk;for(;;){const at=buffer.indexOf('\n');if(at<0)break;const raw=buffer.slice(0,at);buffer=buffer.slice(at+1);try{const message=JSON.parse(raw);if(message.kind==='ready'){ready=message;console.log(JSON.stringify(message));for(const fn of pending.splice(0))fn(message);}else if(message.kind==='error'){console.error('Preview fixture failed ['+message.type+']');void stop(1);}}catch{console.error('Invalid preview fixture protocol');void stop(1);}}});
 child.stderr.on('data',()=>{});child.on('error',()=>{console.error('Unable to start local preview fixture');process.exitCode=1;});
 child.on('exit',code=>{ended=true;if(code&&process.exitCode===undefined)process.exitCode=code;});
-child.stdin.write(JSON.stringify({baseline:BASELINE,before,candidate:path.join(ROOT,'static'),board_json:boardJSON,fingerprint})+'\n');
+child.stdin.write(JSON.stringify({scenario,baseline:BASELINE,before,candidate:path.join(ROOT,'static'),board_json:boardJSON,fingerprint})+'\n');
 function get(base,route,method='GET',headers={}){return new Promise((resolve,reject)=>{
  const origin=new URL(base);assert.equal(origin.protocol,'http:');assert.equal(origin.hostname,'127.0.0.1');
  const req=http.request({hostname:'127.0.0.1',port:Number(origin.port),path:route,method,headers,agent:false},response=>{const chunks=[];response.on('data',chunk=>chunks.push(chunk));response.on('end',()=>resolve({status:response.statusCode,body:Buffer.concat(chunks),headers:response.headers}));});req.on('error',()=>reject(Error('Loopback preview probe failed')));req.setTimeout(8000,()=>req.destroy());req.end();
@@ -66,16 +70,30 @@ function get(base,route,method='GET',headers={}){return new Promise((resolve,rej
 async function smoke(meta){
  const results=[];
  for(const key of ['before_url','after_url']){
-  const base=new URL(meta[key]).origin;const page=await get(base,'/?page=cards');assert.equal(page.status,200);assert.ok(page.body.includes(Buffer.from('cardsBody')));assert.match(page.headers['content-security-policy'],/connect-src 'self'/);
+  assert.equal(new URL(meta[key]).searchParams.get('page'),scenario);
+  const base=new URL(meta[key]).origin;const page=await get(base,'/?page='+scenario);assert.equal(page.status,200);assert.ok(page.body.includes(Buffer.from(scenario==='accounts'?'accountsBody':'cardsBody')));assert.match(page.headers['content-security-policy'],/connect-src 'self'/);
   for(const asset of ['/styles.css','/phone-cards.js','/card-filters.js'])assert.equal((await get(base,asset)).status,200);
   const loaded=await get(base,'/api/board');assert.equal(loaded.status,200);assert.equal(crypto.createHash('sha256').update(loaded.body).digest('hex'),fingerprint);const value=JSON.parse(loaded.body);assert.equal(value.phone_cards.cards.length,120);assert.equal(value.accounts.length,288);
+  if(options.accounts){
+   for(const permission of ['account_create','data_export','nurture_manage'])assert.ok(value.user.permissions.includes(permission));
+   for(const account of [value.accounts[0],value.accounts.at(-1)]){
+    const response=await get(base,'/api/account/inline?id='+encodeURIComponent(account.id));assert.equal(response.status,200);const inline=JSON.parse(response.body);
+    assert.deepEqual(Object.keys(inline).sort(),['account','cursor','record_version']);
+    assert.deepEqual(inline.account,{id:account.id,name:account.name,status:account.status,note:account.note||''});
+    assert.equal(inline.record_version,value.record_versions['account:'+account.id]);assert.equal(inline.cursor,value.cursor);assert.equal(response.headers['cache-control'],'no-store');
+   }
+   assert.equal((await get(base,'/api/account/inline?id=not-a-fixture-account')).status,404);
+   assert.equal((await get(base,'/api/account/inline?id=account-0')).status,404); // excluded from this fixture, despite an old version key
+   assert.equal((await get(base,'/api/account/inline')).status,400);
+   assert.equal((await get(base,'/api/account/inline?id=account-3&id=account-4')).status,400);
+  }
   assert.equal((await get(base,'/api/auth/me')).status,200);assert.equal((await get(base,'/api/board-updates?cursor=10&limit=200')).status,200);assert.equal((await get(base,'/api/record-versions?keys=card:1')).status,200);
-  assert.equal((await get(base,'/api/board','GET',{Referer:base+'/?page=cards&preview_fail=1'})).status,503);
-  assert.equal((await get(base,'/api/board','GET',{Referer:base+'/?page=cards&preview_delay=30'})).status,200);
-  assert.equal((await get(base,'/api/batch-edit','POST')).status,405);assert.equal((await get(base,'/data/board.db')).status,404);
+  assert.equal((await get(base,'/api/board','GET',{Referer:base+'/?page='+scenario+'&preview_fail=1'})).status,503);
+  assert.equal((await get(base,'/api/board','GET',{Referer:base+'/?page='+scenario+'&preview_delay=30'})).status,200);
+  for(const method of ['POST','PUT','PATCH','DELETE'])for(const route of ['/api/batch-edit','/api/account/patch'])assert.equal((await get(base,route,method)).status,405);assert.equal((await get(base,'/data/board.db')).status,404);
   results.push({variant:key.startsWith('before')?'before':'after',get_static:true,get_api:true,data_sha256:fingerprint,post_status:405,protected_path_status:404,error_status:503});
  }
- const evidence={passed:true,kind:'read-only-local-actual-static-preview-smoke',baseline:BASELINE,cards:120,accounts:288,data_sha256:fingerprint,results};
+ const evidence={passed:true,kind:'read-only-local-actual-static-preview-smoke',scenario,baseline:BASELINE,cards:120,accounts:288,data_sha256:fingerprint,results};
  fs.writeFileSync(path.join(runRoot,'smoke-evidence.json'),JSON.stringify(evidence,null,2));console.log(JSON.stringify(evidence));return evidence;
 }
 async function stop(code=0){if(stopping)return;stopping=true;process.exitCode=code;if(!ended){child.stdin.write('{"command":"stop"}\n');child.stdin.end();await Promise.race([new Promise(resolve=>child.once('exit',resolve)),new Promise(resolve=>setTimeout(resolve,3000))]);if(!ended)child.kill();}}
