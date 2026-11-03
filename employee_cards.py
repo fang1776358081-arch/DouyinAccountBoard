@@ -23,7 +23,7 @@ SOURCE = '用户提供的当前业务规则（2026-11-02），未独立核验运
 EFFECTIVE = '2026-11-02'
 OPERATOR_NAMES = (('minsheng', '民生'), ('zhongxing', '中兴'), ('changcheng', '长城'),
                   ('liantong', '联通'), ('dianxin', '电信'), ('yidong', '移动'))
-ACTIONS = {'employee', 'operator', 'rules', 'verification', 'application', 'card_link',
+ACTIONS = {'employee', 'operator', 'rules', 'verification', 'application', 'card_link', 'card_link_batch',
            'replacement', 'cancel_request', 'release'}
 
 
@@ -515,7 +515,109 @@ def _event(db, actor, employee_id, action, detail):
                (_id(), employee_id, int(time.time()), actor['id'], action, _json(detail)))
 
 
-def _execute(db, actor, plan, today):
+def _new_card_links(db, actor, employee_id, records, today, *, action='card_link', batch_id=''):
+    """Shared new-link storage; inputs have already passed real-name and scope checks."""
+    units, links, events = [], [], []
+    for item in records:
+        ident, card, operator = item['id'], item['card'], item['operator']
+        activated, source = item['activated_on'], item['source']
+        units.append((ident, employee_id, operator['id'], 'active', activated, activated,
+                      card['id'], source, _json(_network_policy(operator, activated, today))))
+        links.append((_id(), ident, card['id'], card['phone'], source, today))
+        detail = dict(unit_id=ident, card_id=card['id'], source=source)
+        if batch_id:
+            detail['batch_id'] = batch_id
+        events.append((_id(), employee_id, int(time.time()), actor['id'], action, _json(detail)))
+    if units:
+        db.executemany('INSERT INTO employee_card_units(id,employee_id,operator_id,phase,requested_on,activated_on,current_card_id,source,network_policy) VALUES(?,?,?,?,?,?,?,?,?)', units)
+        db.executemany('INSERT INTO employee_card_links(id,unit_id,card_id,phone_snapshot,source,linked_on) VALUES(?,?,?,?,?,?)', links)
+        db.executemany('INSERT INTO employee_card_events(id,employee_id,at,actor_id,action,detail) VALUES(?,?,?,?,?,?)', events)
+
+
+def _batch_data(data, today):
+    _fields(data, ('cards', 'source'))
+    source = _text(data.get('source', ''), '实名关联依据', required=True)
+    values = data.get('cards')
+    if not isinstance(values, list) or not 1 <= len(values) <= 200:
+        raise ValueError('每批请选择1至200张手机卡')
+    cards, seen = [], set()
+    for item in values:
+        _fields(item, ('card_id', 'operator_id', 'activated_on'))
+        ident = _number(item.get('card_id'), '手机卡编号', minimum=1, maximum=2**63 - 1)
+        if ident in seen:
+            raise ValueError('同一批手机卡编号不能重复')
+        seen.add(ident)
+        cards.append(dict(card_id=ident,
+                          operator_id=_text(item.get('operator_id', ''), '每张卡的发卡运营商', maximum=80, required=True),
+                          activated_on=_day(item.get('activated_on', ''), '办理日期', optional=True, latest=today)))
+    return dict(cards=sorted(cards, key=lambda item: item['card_id']), source=source)
+
+
+def _batch_classification(db, employee_id, data, snapshots):
+    """Only selected, authorized phones are returned; unrelated identities stay private."""
+    cards = {card['id']: card for card in snapshots}
+    operators = {ident: _operator(db, ident) for ident in sorted({item['operator_id'] for item in data['cards']})}
+    ids, phones = sorted(cards), sorted({card['phone'] for card in snapshots})
+    query = ('SELECT l.*,u.employee_id,u.operator_id,u.activated_on FROM employee_card_links l '
+             'LEFT JOIN employee_card_units u ON u.id=l.unit_id WHERE l.card_id IN (' +
+             ','.join('?' for _ in ids) + ') OR l.phone_snapshot IN (' + ','.join('?' for _ in phones) + ') ORDER BY l.id')
+    links = [dict(row) for row in db.execute(query, tuple(ids + phones))]
+    digest = hashlib.sha256(_json(links).encode()).hexdigest()
+    rows, records, counts = [], [], dict(total=len(data['cards']), new=0, existing=0, conflict=0)
+    for item in data['cards']:
+        card, operator = cards[item['card_id']], operators[item['operator_id']]
+        prior = [link for link in links if link['card_id'] == card['id'] or link['phone_snapshot'] == card['phone']]
+        status, reason, activated = 'new', '新建明确实名关联；原手机卡资料保持不变', item['activated_on']
+        if not card['phone']:
+            status, reason = 'conflict', '当前卡号码缺失，请先核对原手机卡资料'
+        elif prior:
+            if len(prior) == 1 and prior[0]['card_id'] == card['id'] and prior[0]['phone_snapshot'] == card['phone'] and prior[0]['employee_id'] == employee_id and prior[0]['operator_id'] == operator['id']:
+                status, reason, activated = 'existing', '已关联同一员工和运营商，保留原办理日期，不重复新增', prior[0]['activated_on']
+            else:
+                status, reason = 'conflict', '已有其他实名关联、运营商或号码历史冲突，请核对；本批不会重绑或覆盖'
+        counts[status] += 1
+        rows.append(dict(card_id=card['id'], phone=card['phone'], operator_id=operator['id'],
+                         operator_name=operator['name'], status=status,
+                         status_label={'new': '新关联', 'existing': '已有关联', 'conflict': '冲突待核对'}[status],
+                         reason=reason, activated_on=activated))
+        if status == 'new':
+            records.append(dict(card=card, operator=operator, activated_on=activated, source=data['source']))
+    return dict(rows=rows, counts=counts, has_conflicts=bool(counts['conflict']),
+                can_apply=not counts['conflict'], digest=digest, records=records)
+
+
+def _execute_card_batch(db, actor, plan, today, *, previewing=False):
+    data, eid = plan['data'], plan['employee_id']
+    classified = _batch_classification(db, eid, data, plan['card_snapshots'])
+    if previewing:
+        # Frozen even if the other association is removed before a later confirmation.
+        plan['batch_blocked'] = classified['has_conflicts']
+        plan['batch_link_digest'] = classified['digest']
+    elif plan.get('batch_blocked', True):
+        raise operations.ConflictError('该批预览存在冲突，不能确认；请核对后重新预览；整批未保存')
+    elif classified['has_conflicts'] or classified['digest'] != plan.get('batch_link_digest'):
+        raise operations.ConflictError('手机卡实名关联已变化，请重新预览；整批未保存')
+    if not classified['has_conflicts']:
+        for item in classified['records']:
+            item['id'] = plan['batch_unit_ids'][str(item['card']['id'])]
+        db.execute('SAVEPOINT employee_card_batch_write')
+        try:
+            _new_card_links(db, actor, eid, classified['records'], today,
+                            action='card_link_batch', batch_id=plan['new_id'])
+        except BaseException:
+            db.execute('ROLLBACK TO SAVEPOINT employee_card_batch_write')
+            raise
+        finally:
+            db.execute('RELEASE SAVEPOINT employee_card_batch_write')
+    counts = classified['counts']
+    return dict(id=plan['new_id'], employee_id=eid, counts=counts, rows=classified['rows'],
+                has_conflicts=classified['has_conflicts'], can_apply=classified['can_apply'],
+                summary=[f"本批{counts['total']}张：新关联{counts['new']}张，已有关联{counts['existing']}张，冲突{counts['conflict']}张；" +
+                         ('存在冲突，整批禁止确认' if classified['has_conflicts'] else '仅保存实名关联，原卡资料不变'),
+                         '本次登记存量实名关系，不自动完成在途申请；已有申请请在高级办卡管理逐项核对。'])
+
+
+def _execute(db, actor, plan, today, *, previewing=False):
     action, eid, data = plan['action'], plan['employee_id'], plan['data']
     ident = data.get('id') or plan['new_id']
     if action == 'employee':
@@ -613,6 +715,8 @@ def _execute(db, actor, plan, today):
         _event(db, actor, '', action, dict(rule_ids=sorted(seen)))
         return dict(id='rules', employee_id='', summary=['保存明确提交的规则；未提交的既有规则保留'])
     _require_employee(db, actor, eid)
+    if action == 'card_link_batch':
+        return _execute_card_batch(db, actor, plan, today, previewing=previewing)
     if action == 'application':
         _fields(data, ('id', 'operator_id', 'requested_on', 'applied_on', 'quantity', 'result', 'failure_reason', 'retry_on', 'retry_source', 'failure_resolved', 'source'))
         old = db.execute('SELECT * FROM employee_card_applications WHERE id=? AND employee_id=?', (ident, eid)).fetchone() if data.get('id') else None
@@ -673,7 +777,9 @@ def _execute(db, actor, plan, today):
                 ident = unit['id']
                 db.execute('UPDATE employee_card_units SET phase=?,activated_on=?,current_card_id=?,source=?,network_policy=?,revision=revision+1 WHERE id=?', ('active', activated, card['id'], source, network_policy, ident))
             else:
-                db.execute('INSERT INTO employee_card_units(id,employee_id,operator_id,phase,requested_on,activated_on,current_card_id,source,network_policy) VALUES(?,?,?,?,?,?,?,?,?)', (ident, eid, op['id'], 'active', activated, activated, card['id'], source, network_policy))
+                _new_card_links(db, actor, eid, [dict(id=ident, card=card, operator=op,
+                                activated_on=activated, source=source)], today)
+                return dict(id=ident, employee_id=eid, summary=['保存明确实名关系；不修改原卡主、使用人、保管人或卡状态'])
         db.execute('INSERT INTO employee_card_links(id,unit_id,card_id,phone_snapshot,source,linked_on) VALUES(?,?,?,?,?,?)', (_id(), ident, card['id'], card['phone'], source, today))
         _event(db, actor, eid, action, dict(unit_id=ident, card_id=card['id'], source=source))
         return dict(id=ident, employee_id=eid, summary=['保存明确实名关系；不修改原卡主、使用人、保管人或卡状态'])
@@ -767,7 +873,16 @@ def _execute(db, actor, plan, today):
     raise ValueError('员工办卡操作不正确')
 
 
-def _card_snapshots(db, actor, data):
+def _card_snapshots(db, actor, data, *, batch=False):
+    if batch:
+        # Re-authorize each selected card on every preview/apply; scope cannot be cached.
+        snapshots = []
+        for item in data['cards']:
+            card = _card(db, actor, item['card_id'])
+            card['_office_ids'] = (sorted(office_scope.entity_offices(db, 'cards', card['id']))
+                                   if getattr(db, 'scope_enabled', False) else [])
+            snapshots.append(card)
+        return snapshots
     return [_card(db, actor, data['card_id'])] if 'card_id' in data else []
 
 
@@ -785,22 +900,29 @@ def preview(db, actor, body, today):
     data = body.get('data')
     if not isinstance(data, dict):
         raise ValueError('请提交本次操作资料')
+    if action == 'card_link_batch':
+        data = _batch_data(data, today)
     quantity = data.get('quantity', 1)
     if action == 'application' and not data.get('id'):
         quantity = _number(quantity, '申请数量', minimum=1, maximum=100)
     plan = dict(action=action, employee_id=eid, data=data, new_id=_id(),
                 unit_ids=[_id() for _ in range(quantity if action == 'application' and not data.get('id') else 0)],
                 expected_version=current, day=today, restore_generation=_generation(db),
-                card_snapshots=_card_snapshots(db, actor, data))
+                card_snapshots=_card_snapshots(db, actor, data, batch=action == 'card_link_batch'))
+    if action == 'card_link_batch':
+        plan['batch_unit_ids'] = {str(item['card_id']): _id() for item in data['cards']}
     db.execute('SAVEPOINT employee_card_preview_check')
     try:
-        result = _execute(db, actor, plan, today)
+        result = _execute(db, actor, plan, today, previewing=True)
     finally:
         db.execute('ROLLBACK TO SAVEPOINT employee_card_preview_check')
         db.execute('RELEASE SAVEPOINT employee_card_preview_check')
     preview_id = operations.preview(db, actor, 'employee-cards', plan)
-    return dict(preview_id=preview_id, action=action, employee_id=eid, summary=result['summary'],
-                version=current, expires_at=int(time.time()) + 1800)
+    response = dict(preview_id=preview_id, action=action, employee_id=eid, summary=result['summary'],
+                    version=current, expires_at=int(time.time()) + 1800)
+    if action == 'card_link_batch':
+        response.update({key: result[key] for key in ('rows', 'counts', 'has_conflicts', 'can_apply')})
+    return response
 
 
 def apply(db, actor, body, today):
@@ -828,11 +950,14 @@ def apply(db, actor, body, today):
     _authorize(db, actor, plan['action'], plan['employee_id'])
     if plan['day'] != today or _version(db, actor, plan['employee_id']) != plan['expected_version']:
         raise operations.ConflictError('员工资料、权限、日期或规则已变化，请重新预览；未保存')
-    if _card_snapshots(db, actor, plan['data']) != plan['card_snapshots']:
+    if _card_snapshots(db, actor, plan['data'], batch=plan['action'] == 'card_link_batch') != plan['card_snapshots']:
         raise operations.ConflictError('手机卡资料或范围已变化，请重新预览；未保存')
     saved = _execute(db, actor, plan, today)
     result = dict(ok=True, id=saved['id'], employee_id=saved['employee_id'], action=plan['action'],
                   version=_version(db, actor, saved['employee_id']))
+    if plan['action'] == 'card_link_batch':
+        # Request lookup rechecks employee scope, so receipts deliberately omit card details.
+        result['counts'] = saved['counts']
     db.execute('INSERT INTO employee_card_requests(actor_id,request_id,restore_generation,fingerprint,employee_id,action,result,created_at) VALUES(?,?,?,?,?,?,?,?)',
                (actor['id'], request_id, _generation(db), fingerprint, saved['employee_id'], plan['action'], _json(result), int(time.time())))
     db.execute('DELETE FROM operations_previews WHERE id=?', (body['preview_id'],))

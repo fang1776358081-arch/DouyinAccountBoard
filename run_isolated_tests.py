@@ -22,6 +22,7 @@ def main():
     allowed.add('test_account_collaboration_http')
     allowed.update({'test_employee_card_rules','test_employee_cards','test_employee_cards_http','test_employee_card_schema'})
     allowed.add('test_employee_card_ledger')
+    allowed.update({'test_employee_card_batch','test_employee_card_batch_http'})
     allowed.update({'test_publish_review','test_publish_review_http'})
     if not set(args.modules) <= allowed:
         parser.error('Test module has not been reviewed for synthetic execution')
