@@ -88,6 +88,43 @@ class EmployeeCardsHTTPTest(unittest.TestCase):
         return self.call('/api/employee-cards/apply', {'preview_id': preview['preview_id'],
             'request_id': request_id or str(uuid4()), 'confirmation': '确认保存'}, client=self.owner)
 
+    def test_name_association_is_read_only_over_http_and_keeps_unknown_quota(self):
+        status, saved, _ = self.apply_preview(self.preview_employee())
+        self.assertEqual(status, 200, saved)
+        ident = saved['employee_id']
+        with app.connect() as db:
+            import phone_cards
+            actor = auth.public_user(db.execute("SELECT * FROM auth_users WHERE role='owner'").fetchone())
+            card = phone_cards.save(db, dict(phone='13800000881', owner='合成员工',
+                carrier='待确认', status='已注销', code_state='无待办', return_state='不需归还'), actor=actor)
+            tables = ('phone_cards', 'employee_card_units', 'employee_card_links', 'employee_card_events')
+            original = {table: [tuple(row) for row in db.execute('SELECT * FROM ' + table + ' ORDER BY 1')]
+                        for table in tables}
+        for _ in range(2):
+            status, result, headers = self.call('/api/employee-cards?view=cards', client=self.owner)
+            self.assertEqual(status, 200, result)
+            self.assertEqual(headers['Cache-Control'], 'no-store')
+            self.assertEqual(result['card_ledger_totals']['registered'], 1)
+            self.assertEqual(result['card_ledger_totals']['closed'], 1)
+            self.assertEqual(result['employees'][0]['card_ledger']['name_matched_count'], 1)
+            self.assertIsNone(result['employees'][0]['summary']['estimated_available'])
+        before_version = result['employees'][0]['version']
+        status, detail, _ = self.call('/api/employee-cards?employee_id=' + ident, client=self.owner)
+        self.assertEqual(status, 200, detail)
+        self.assertEqual(detail['linked_cards'][0]['card_id'], card)
+        self.assertEqual(detail['linked_cards'][0]['association_source'], 'name')
+        self.assertEqual(detail['linked_cards'][0]['operator_id'], '')
+        self.assertEqual(detail['units'], [])
+        with app.connect() as db:
+            after = {table: [tuple(row) for row in db.execute('SELECT * FROM ' + table + ' ORDER BY 1')]
+                     for table in tables}
+            self.assertEqual(after, original)
+            db.execute('UPDATE phone_cards SET owner=? WHERE id=?', ('合成其他卡主', card))
+        status, result, _ = self.call('/api/employee-cards?view=cards', client=self.owner)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result['card_ledger_totals']['registered'], 0)
+        self.assertNotEqual(result['employees'][0]['version'], before_version)
+
     def test_anonymous_and_csrf_are_required_and_no_store_is_retained(self):
         status, value, headers = self.call('/api/employee-cards')
         self.assertEqual(status, 401)

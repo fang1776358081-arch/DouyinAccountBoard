@@ -107,6 +107,29 @@ def main():
             pass
         assert counts() == current and legacy() == before_legacy
         checks.append('other-employee-conflict-blocks-whole-batch-without-legacy-mutation')
+
+        # Exact-name views are derived on reads, including when the real
+        # operator is unknown. No additional unit or historical link is made.
+        auto_card = db.execute('INSERT INTO phone_cards(phone,owner,carrier,status) VALUES(?,?,?,?) RETURNING id',
+                              ('13800009881', '合成PG员工1', '待确认', '已注销')).fetchone()[0]
+        db.commit()
+        initial_counts, initial_legacy = counts(), legacy()
+        detail = employee_cards.get(db, actor, {'employee_id': [people[0]]}, day)
+        assert detail['card_ledger']['registered'] == 3
+        assert detail['card_ledger']['name_matched_count'] == 1
+        derived = next(row for row in detail['linked_cards'] if row['card_id'] == auto_card)
+        assert derived['association_source'] == 'name' and derived['operator_id'] == ''
+        assert derived['ledger_state'] == 'closed' and derived['activated_on'] == ''
+        assert detail['summary']['estimated_available'] is None
+        assert counts() == initial_counts and legacy() == initial_legacy
+        checks.append('real-pg-name-association-read-only-with-unknown-operator')
+        previous_version = detail['version']
+        db.execute('UPDATE phone_cards SET owner=? WHERE id=?', ('合成无匹配姓名', auto_card))
+        db.commit()
+        changed = employee_cards.get(db, actor, {'employee_id': [people[0]]}, day)
+        assert changed['card_ledger']['registered'] == 2 and changed['version'] != previous_version
+        assert counts() == initial_counts
+        checks.append('real-pg-name-change-refreshes-view-and-version-without-duplicate-units')
     print(json.dumps(dict(passed=True, kind='real-loopback-postgresql-synthetic-batch-only',
                           checks=checks, production_connected=False), ensure_ascii=True))
 

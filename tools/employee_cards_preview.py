@@ -19,6 +19,7 @@ from test_isolation import create_root, install
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--root', required=True)
+    parser.add_argument('--name-match', action='store_true', help='Add only generated same-name cards for the automatic association preview')
     args = parser.parse_args()
     root = create_root(args.root)
     install(root)
@@ -71,6 +72,14 @@ def main():
         period_end=today, count=10, coverage='total', verified_on=today, valid_until=today,
         source='仅合成：涵盖全部基础运营商与虚商的名下核验', pending_unit_ids=[]), employee_ids[2])
 
+    if args.name_match:
+        with app.connect() as db:
+            name = db.execute('SELECT name FROM employee_card_employees WHERE id=?', (employee_ids[0],)).fetchone()[0]
+            for index, status in enumerate(('正常', '已注销', '待确认'), 1):
+                phone_cards.save(db, dict(phone='1380000070' + str(index), carrier='待确认',
+                    status=status, owner=name, keeper='合成保管人', code_state='无待办',
+                    return_state='不需归还', note='仅合成姓名匹配，不创建名额'), actor=owner)
+
     class FixtureHandler(app.Handler):
         def log_message(self, *_args):
             pass
@@ -102,6 +111,7 @@ def main():
     meta = dict(kind='real-service-local-synthetic-preview', url=base + '/__synthetic_start__',
                 viewer_url=base + '/__synthetic_start__?role=viewer', employees=3,
                 production_connected=False, legacy_writes_disabled=True, root=str(root))
+    meta['name_match_fixture'] = bool(args.name_match)
     (root / 'preview-metadata.json').write_text(json.dumps(meta, indent=2), encoding='utf-8')
     print(json.dumps(meta), flush=True)
     try:

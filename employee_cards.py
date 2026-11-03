@@ -1,4 +1,4 @@
-"""Employee real-name card ledger. Legacy owner/keeper strings are never identities.
+"""Employee real-name card ledger with explicit links and exact owner-name views.
 
 Read independently of /api/board; callers own authenticated read/write transactions.
 The module never writes phone_cards, auth_users or office grants.
@@ -223,14 +223,17 @@ def _bundle(db, actor):
                           revision=r['revision'], created_at=r['created_at'])
                      for r in rows('employee_card_verifications', 'created_at,id')]
     links = ([dict(r) for r in db.execute('SELECT l.*,u.employee_id FROM employee_card_links l JOIN employee_card_units u ON u.id=l.unit_id WHERE u.employee_id IN (' + ','.join('?' for _ in ids) + ') ORDER BY l.id', tuple(sorted(ids)))] if ids else [])
+    allowed = None if office_scope.global_scope(actor) else _allowed_cards(db, actor)
+    name_cards, name_match_metadata = employee_card_ledger.name_associations(db, actor, employees, allowed)
     return dict(employees=employees, operators=operators, rules=rules, units=units,
-                applications=applications, verifications=verifications, links=links)
+                applications=applications, verifications=verifications, links=links,
+                name_cards=name_cards, name_match_metadata=name_match_metadata)
 
 
 def _version(db, actor, ident='', *, bundle=None, scope=None):
     records = dict(_bundle(db, actor) if bundle is None else bundle)
     if ident:
-        for key in ('employees', 'units', 'applications', 'verifications', 'links'):
+        for key in ('employees', 'units', 'applications', 'verifications', 'links', 'name_cards', 'name_match_metadata'):
             records[key] = [row for row in records[key] if row.get('employee_id', row.get('id')) == ident]
     if scope is None:
         scope = dict(actor_id=actor['id'], role=actor['role'], permissions=sorted(actor['permissions']),
@@ -242,7 +245,8 @@ def _version(db, actor, ident='', *, bundle=None, scope=None):
 def _scope_incomplete(ident, bundle, allowed_cards):
     if allowed_cards is None:
         return False
-    return (any(u['employee_id'] == ident and u['current_card_id'] is not None and u['current_card_id'] not in allowed_cards for u in bundle['units'])
+    return (any(row['employee_id'] == ident and row['scope_incomplete'] for row in bundle.get('name_match_metadata', []))
+            or any(u['employee_id'] == ident and u['current_card_id'] is not None and u['current_card_id'] not in allowed_cards for u in bundle['units'])
             or any(link['employee_id'] == ident and link['card_id'] not in allowed_cards for link in bundle['links']))
 
 
@@ -281,6 +285,48 @@ def _summary(employee, bundle, today, allowed_cards=None):
                       company_inventory_complete=None, count_basis=dict(basis),
                       reasons=[dict(code='scope_incomplete', text='关联卡范围不完整，不能确定可申请数量', kind='unknown')])
             op.pop('count_evidence', None)
+    elif (any(card['employee_id'] == ident for card in bundle.get('name_cards', []))
+          or any(row['employee_id'] == ident and not row.get('association_complete', True)
+                 for row in bundle.get('name_match_metadata', []))):
+        # Physical cards from current names are not invented quota units.
+        # Preserve the original verification source/count, while withholding
+        # reconciliation and capacity until issuer, dates and units are known.
+        ambiguous = any(row['employee_id'] == ident and not row.get('association_complete', True)
+                        for row in bundle.get('name_match_metadata', []))
+        reason = dict(code='name_association_ambiguous' if ambiguous else 'name_association_quota_unverified', kind='unknown',
+                      text=('卡主姓名无法唯一对应实名关系或与既有关系不一致，完整卡归属及名额对应待核对；原核验记录保留，不能确定余额' if ambiguous else
+                            '存在按卡主姓名自动关联的卡片，实际发卡商、办理日期及名额对应尚未核验；原核验记录保留，不能据当前名额台账确定余额'))
+        result['issues'] = list(result.get('issues', [])) + [reason['code']]
+        for key in ('company_lifetime', 'company_current', 'other_current', 'pending_count', 'estimated_available'):
+            result[key] = None
+        for key in ('company_lifetime', 'company_current', 'other_current', 'pending', 'estimated_available'):
+            result['counts'][key] = None
+        result.update(name_association_quota_unverified=True, company_inventory_complete=False,
+                      next_followup_on=None, followup_action='verify')
+        result['count_basis'] = dict(result['count_basis'], company='name_association_unverified',
+                                     company_inventory_complete=False, other_current='unknown',
+                                     notes=list(result['count_basis'].get('notes', [])) + [reason['text']])
+        for op in result['operators']:
+            op.update(estimated_available=None, company_inventory_complete=False,
+                      next_followup_on=None, followup_action='verify')
+            if op['status'] != 'ineligible':
+                op.update(status='needs_verification', status_label='待核验')
+            op['reasons'] = list(op.get('reasons', [])) + [dict(reason)]
+            for key in ('company_lifetime', 'company_current', 'other_current', 'pending', 'estimated_available'):
+                op['counts'][key] = None
+            op['count_basis'] = dict(op['count_basis'], company='name_association_unverified',
+                                     company_inventory_complete=False, other_current='unknown',
+                                     notes=list(op['count_basis'].get('notes', [])) + [reason['text']])
+            for limit in op.get('limits', []):
+                limit.update(used=None, reserved=None, available=None)
+                limit['issues'] = list(limit.get('issues', [])) + [reason['code']]
+                limit['issue_labels'] = list(limit.get('issue_labels', [])) + [reason['text']]
+            if op.get('count_evidence'):
+                evidence = op['count_evidence']
+                evidence.update(other_current=None, reconciled_used=None, company_inventory_complete=False,
+                                count_basis=dict(op['count_basis']))
+                evidence['issues'] = list(evidence.get('issues', [])) + [reason['code']]
+                evidence['issue_labels'] = list(evidence.get('issue_labels', [])) + [reason['text']]
     return result
 
 
@@ -394,7 +440,9 @@ def get(db, actor, query, today):
                  or followup == 'unscheduled' and not r['summary'].get('next_followup_on'))]
     # Do not turn an unresolved card match into a confirmed zero when a card
     # predicate excludes the row. Non-card employee filters still apply first.
-    filter_incomplete = any(not row['card_ledger']['scope_complete'] for row in rows)
+    scope_complete = all(row['card_ledger']['scope_complete'] for row in rows)
+    association_complete = all(row['card_ledger'].get('association_complete', True) for row in rows)
+    filter_incomplete = not scope_complete or not association_complete
     rows = [row for row in rows
             if (not cards_view or status or not operator or bool(row['card_ledger']['registered']))
             and employee_card_ledger.matches(row['card_ledger'], card_state)]
@@ -421,8 +469,10 @@ def get(db, actor, query, today):
     ledger_totals = employee_card_ledger.aggregate([row['card_ledger'] for row in rows],
                                                  '当前员工筛选结果 · ' + scope_label)
     if filter_incomplete:
-        ledger_totals = dict({key: None for key in employee_card_ledger.COUNTS}, scope_complete=False,
-                             scope_label='部分关联卡范围不完整，当前卡筛选匹配及合计待核对')
+        ledger_totals = dict({key: None for key in employee_card_ledger.COUNTS}, scope_complete=scope_complete,
+                             association_complete=association_complete, name_matched_count=None,
+                             association_issues=['卡片授权范围或姓名归属尚未完整核对'],
+                             scope_label='部分关联卡范围或姓名归属不完整，当前卡筛选匹配及合计待核对')
     return dict(meta, employees=rows[(page - 1) * size:page * size], summaries=summaries,
                 card_ledger_totals=ledger_totals,
                 card_ledger_filter_incomplete=filter_incomplete,
