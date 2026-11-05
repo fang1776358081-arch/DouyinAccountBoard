@@ -25,6 +25,7 @@ def main():
     allowed.update({'test_employee_card_batch','test_employee_card_batch_http'})
     allowed.add('test_employee_card_name_match')
     allowed.update({'test_publish_review','test_publish_review_http'})
+    allowed.update({'test_table_sync','test_table_sync_http'})
     if not set(args.modules) <= allowed:
         parser.error('Test module has not been reviewed for synthetic execution')
     root = create_root(args.root)

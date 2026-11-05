@@ -63,12 +63,26 @@ function attributes(current, id, expected) {
 
 const pages = ['index.html', 'workspace.html', 'users.html', 'login.html'].map(page);
 const consoles = pages.slice(0, 3), login = pages[3];
+const presentationLayers = {
+  'index.html': ['console-theme.css', 'account-workspace.css', 'account-inline.css', 'card-console.css', 'pilot-console.css'],
+  'workspace.html': ['console-theme.css', 'pilot-console.css'],
+  'users.html': ['console-theme.css'],
+  'login.html': ['login-theme.css'],
+};
 for (const current of pages) check(current.name + ': local assets and versioned theme with page overrides', () => {
   const expected = current === login ? 'login-theme.css' : 'console-theme.css';
   const styleAssets = current.styles.map(tag => asset(tag.attributes.href));
-  assert.equal(styleAssets.at(-1), current === pages[0] ? 'card-console.css' : expected);
+  const layers = presentationLayers[current.name];
+  assert.equal(styleAssets.at(-1), layers.at(-1));
+  let previous = -1;
+  for (const name of layers) {
+    assert.equal(styleAssets.filter(item => item === name).length, 1, current.name + ': one presentation layer ' + name);
+    const index = styleAssets.indexOf(name);
+    assert.ok(index > previous, current.name + ': retain shell, account, card and pilot override order');
+    assert.match(current.styles[index].attributes.href, /\?v=\d{8}/, name + ': version every presentation override');
+    previous = index;
+  }
   assert.equal(styleAssets.filter(name => name === expected).length, 1);
-  assert.match(current.styles.at(-1).attributes.href, /\?v=\d{8}/);
   for (const script of current.scripts) {
     assert.ok(has(script, 'src'), current.name + ': no new inline scripts');
     asset(script.attributes.src);
@@ -81,16 +95,41 @@ for (const current of pages) check(current.name + ': local assets and versioned 
 });
 
 const expectedScripts = {
-  'index.html': words(`device-workflow.js card-page.js card-details.js live-sync.js scope-ui.js edit-versions.js identity-labels.js
+  'index.html': words(`device-workflow.js card-page.js card-details.js live-sync.js pilot-console.js scope-ui.js edit-versions.js identity-labels.js
     field-search.js lifecycle.js card-filters.js phone-cards.js phone-devices.js offices.js publishing-layout.js
-    publishing-match.js publishing-pending.js workspace-shortcuts.js auth-ui.js verification.js batch-edit.js account-workspace.js account-inline.js app.js`),
-  'workspace.html': words(`device-workflow.js live-sync.js scope-ui.js identity-labels.js field-search.js
+    publishing-match.js publishing-pending.js workspace-shortcuts.js auth-ui.js verification.js batch-edit.js account-workspace.js account-inline.js employee-card-link.js app.js`),
+  'workspace.html': words(`device-workflow.js live-sync.js pilot-console.js scope-ui.js identity-labels.js field-search.js
     edit-versions.js workspace-model.js account-review.js nurture.js batch-edit.js office-three-import.js workspace.js collection-panel.js`),
   'users.html': ['users.js'],
   'login.html': ['login.js'],
 };
 for (const current of pages) check(current.name + ': existing script order preserved', () => {
   assert.deepEqual(current.scripts.map(tag => tag.attributes.src.split('?')[0].slice(1)), expectedScripts[current.name]);
+});
+
+check('pilot overrides stay behind the explicit office class and preserve the shared sidebar', () => {
+  const css = withoutComments(read('pilot-console.css'));
+  assert.doesNotMatch(css, /@import\b|url\s*\(/i, 'pilot must not add external visual requests');
+  let rules = 0;
+  for (const rule of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const selectors = rule[1].trim();
+    if (selectors.startsWith('@')) continue;
+    for (const selector of selectors.split(','))
+      assert.match(selector.trim(), /^\.office-pilot(?:\s|[>.:#\[])/, 'every pilot selector requires the office activation class');
+    assert.doesNotMatch(rule[2], /--console-(?:sidebar|nav-bg)\s*:/, 'pilot cannot redefine shell geometry or sidebar background');
+    assert.doesNotMatch(selectors, /(?:^|[\s>])aside\b|(?:^|,\s*):root\b/, 'pilot leaves the shared sidebar container and root tokens intact');
+    rules++;
+  }
+  assert.ok(rules >= 10, 'inspect actual pilot rules, including responsive overrides');
+  for (const current of pages) {
+    const scripts = current.scripts.filter(tag => asset(tag.attributes.src) === 'pilot-console.js');
+    const styles = current.styles.filter(tag => asset(tag.attributes.href) === 'pilot-console.css');
+    const isPilotHost = ['index.html', 'workspace.html'].includes(current.name);
+    assert.equal(scripts.length, isPilotHost ? 1 : 0);
+    assert.equal(styles.length, isPilotHost ? 1 : 0);
+    if (isPilotHost) assert.ok(has(scripts[0], 'defer'), 'pilot enhancement waits for the original page DOM');
+    assert.equal(hasClass(current.elements.find(tag => tag.name === 'body'), 'office-pilot'), false, 'ordinary pages do not activate pilot CSS by default');
+  }
 });
 
 for (const current of consoles) check(current.name + ': three exclusive navigation groups', () => {

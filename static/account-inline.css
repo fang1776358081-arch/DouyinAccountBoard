@@ -7,4 +7,5 @@
 .account-inline-editor textarea{resize:vertical;min-height:80px}.account-inline-actions{display:flex;gap:6px}.account-inline-actions button{border:1px solid #c8dbd3;border-radius:5px;background:#fff;padding:3px 9px;color:#285542;font-size:12px;cursor:pointer}.account-inline-actions button:disabled{opacity:.5;cursor:wait}
 .account-inline-status{font-size:11px;line-height:1.5;color:#775426;overflow-wrap:anywhere}.account-inline-note-preview{margin-bottom:10px;font-size:12px;line-height:1.6;color:#486156}
 .account-inline-pending{font-size:11px;white-space:nowrap;color:#775426}
+.account-inline-undo{margin-left:10px;padding:0;border:0;background:transparent;color:#176c51;font:inherit;cursor:pointer;text-decoration:underline;text-underline-offset:3px}.account-inline-undo:focus-visible{outline:2px solid #27845c;outline-offset:3px}
 @media(max-width:720px){.account-inline-editor{min-width:125px}.account-inline-hint{font-size:11px}}

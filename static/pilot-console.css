@@ -1,0 +1,20 @@
+.office-pilot main>header{position:relative;flex-wrap:wrap;gap:12px;margin-bottom:16px}
+.office-pilot .pilot-office-context{color:#1e4f93;background:#eef4ff;border:1px solid #cdddff;border-radius:5px;padding:5px 9px;font-size:12px;font-weight:600}
+.office-pilot .side-nav>a{margin-bottom:5px}.office-pilot .side-nav>a small{font-size:11px;margin-left:auto;padding:1px 5px;background:#edf3ff;color:#315d9c;border-radius:3px}
+.office-pilot .live-sync-bar{padding:3px 0;margin:0 0 12px;border:0;background:transparent;font-size:12px;color:#64748b;min-height:23px}
+.office-pilot .live-sync-bar:has([data-sync-phase=error]){padding:8px 12px;background:#fff8ed;color:#925a00;border:1px solid #f2dfb8;border-radius:6px}
+.office-pilot .live-sync-bar [data-sync-phase=syncing]{color:#64748b}
+.office-pilot .pilot-workflow{display:flex;align-items:center;flex-wrap:wrap;gap:8px;border-bottom:1px solid #e4e9ef;padding:0 0 14px;margin:0 0 18px}
+.office-pilot .pilot-workflow a,.office-pilot .pilot-workflow button{font:inherit;font-size:13px;border:1px solid #dce3ec;background:#fff;border-radius:5px;color:#41516b;text-decoration:none;padding:7px 12px;cursor:pointer}
+.office-pilot .pilot-workflow [aria-current=step]{background:#eaf2ff;color:#1657a6;border-color:#bad0ed;font-weight:600}
+.office-pilot .todo-counts{display:grid;grid-template-columns:repeat(4,minmax(120px,1fr));gap:10px;margin:16px 0}
+.office-pilot .todo-counts button{text-align:left;border:1px solid #e1e7ee;border-radius:6px;box-shadow:none;padding:12px 14px;font-size:13px;background:#fff}
+.office-pilot .todo-counts strong{font-size:23px;color:#172b4d;margin-bottom:3px}
+.office-pilot .pilot-other-tasks{margin:8px 0 16px;color:#52617a;font-size:13px}
+.office-pilot .pilot-other-tasks .todo-counts{grid-template-columns:repeat(4,minmax(120px,1fr))}
+.office-pilot .workspace-table td{padding:11px 12px;line-height:1.55;font-size:13px}
+.office-pilot .workspace-table small{color:#718096}
+.office-pilot .workspace-table th{font-size:12px;background:#f7f9fc;font-weight:600}
+.office-pilot .collection-actions[hidden],.office-pilot input[hidden]{display:none!important}
+@media(max-width:1100px){.office-pilot .todo-counts,.office-pilot .pilot-other-tasks .todo-counts{grid-template-columns:repeat(2,minmax(110px,1fr))}}
+@media(prefers-reduced-motion:reduce){.office-pilot *{scroll-behavior:auto!important;transition:none!important}}

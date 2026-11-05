@@ -116,7 +116,7 @@
 .accounts-console .account-inline-hint[data-inline-phase="unknown"] { border: 1px solid #f4d5a2; }
 .accounts-console .account-batch-toolbar { margin: 0; padding: 10px 20px; border-top: 1px solid var(--ui-border); background: #fafbfc; gap: 8px; }
 .accounts-console .account-batch-toolbar:has([data-batch-open]) { background: var(--ui-primary-soft); }
-.accounts-console .account-batch-toolbar:not(:has([data-batch-open])) #collectSelected { display: none; }
+.accounts-console #collectSelected { flex-shrink: 0; }
 .accounts-console .account-selection-summary { font-size: 12px; color: var(--ui-secondary); margin-right: auto; }
 .accounts-console .account-batch-content { gap: 8px; }
 .accounts-console #accountsView > .account-scroll { overflow: auto; max-height: 68vh; scrollbar-width: thin; border-top: 1px solid var(--ui-border); }
@@ -174,3 +174,33 @@
  .accounts-console .account-selection-summary { flex-basis: 100%; }
  .accounts-console #accountWorkspace > .panel-heading { flex-wrap: wrap; }
 }
+
+/* Office-three pilot: task facts on the row, complete records in a drawer. */
+.account-pilot .account-common-filters { grid-template-columns: repeat(5,minmax(0,1fr)); }
+@media (min-width:1201px) {
+ .account-pilot .account-common-filters { grid-template-columns: repeat(5,minmax(0,1fr)) auto; }
+ .account-pilot .account-filter-actions { grid-column: auto; margin: 0; }
+}
+.account-pilot .account-table { min-width: 950px; }
+.account-pilot .account-table :is(th,td) { padding: 10px 12px; }
+.account-pilot .account-table th:nth-child(2) { width: 200px; }
+.account-pilot .account-table th:nth-child(3) { width: 145px; }
+.account-pilot .account-table th:nth-child(4) { width: 220px; }
+.account-pilot .account-table th:nth-child(5) { width: 100px; }
+.account-pilot .account-table th:nth-child(7) { width: 100px; }
+.account-pilot .account-pilot-owner { color: var(--ui-text); }
+.account-pilot .account-pilot-warning { display: inline-block; padding: 1px 7px; border-radius: 4px; font-size: 12px; line-height: 22px; color: #8b5e00; background: #fff6df; }
+.account-pilot .account-pilot-source-state { margin: 0 20px 8px; color: var(--ui-secondary); font-size: 12px; line-height: 20px; }
+.account-pilot .account-pilot-source-state[data-phase="error"] { color: #9a6200; }
+.account-pilot .account-pilot-source-retry { margin: 0 20px 8px; }
+.console-page dialog.account-pilot-detail { position: fixed; inset: 0 0 0 auto; margin: 0; padding: 22px 24px; width: min(540px,100vw); height: 100dvh; max-height: 100dvh; max-width: 100vw; box-sizing: border-box; border-radius: 0; display: none; overflow: auto; }
+.console-page dialog.account-pilot-detail[open] { display: flex; flex-direction: column; }
+.account-pilot-detail .dialog-head { position: sticky; top: -22px; background: #fff; z-index: 1; flex-shrink: 0; }
+.account-pilot-detail-body { flex: 1; }
+.account-pilot-detail-body section { padding: 14px 0; border-bottom: 1px solid var(--ui-border,#e4e7ec); }
+.account-pilot-detail-body h3 { margin: 0 0 10px; color: #263b50; font-size: 14px; }
+.account-pilot-detail-body p { margin: 6px 0; font-size: 13px; line-height: 22px; overflow-wrap: anywhere; }
+.account-pilot-detail-body .account-detail-note { white-space: pre-wrap; }
+.account-pilot-detail-footer { position: sticky; bottom: -22px; display: flex; flex-wrap: wrap; gap: 8px; background: #fff; padding: 14px 0; border-top: 1px solid var(--ui-border,#e4e7ec); }
+@media (max-width:1200px) { .account-pilot .account-common-filters { grid-template-columns: repeat(3,minmax(0,1fr)); } }
+@media (max-width:760px) { .account-pilot .account-common-filters { grid-template-columns: repeat(2,minmax(0,1fr)); } .console-page dialog.account-pilot-detail { padding: 18px; } }

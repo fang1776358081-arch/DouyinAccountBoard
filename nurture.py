@@ -60,8 +60,17 @@ def usable(account):
 
 def sync(db,today,account_ids=None):
     """Keep due records until explicitly completed; never reset completion on a read."""
-    for account in db.execute('SELECT id,status,registered_on,nurture_started FROM accounts').fetchall():
-        if account_ids is not None and account['id'] not in account_ids:continue
+    query='SELECT id,status,registered_on,nurture_started FROM accounts'
+    if account_ids is None:
+        accounts=db.execute(query).fetchall()
+    else:
+        ids=list(dict.fromkeys(account_ids))
+        if not ids:return
+        accounts=[]
+        for offset in range(0,len(ids),400):
+            chunk=ids[offset:offset+400]
+            accounts.extend(db.execute(query+' WHERE id IN ('+','.join('?' for _ in chunk)+')',chunk).fetchall())
+    for account in accounts:
         record=db.execute('SELECT * FROM nurture_records WHERE account_id=?',(account['id'],)).fetchone()
         started=account['nurture_started'] or account['registered_on']
         try:recent=bool(started and 0<=(date.fromisoformat(today)-date.fromisoformat(started)).days<7)

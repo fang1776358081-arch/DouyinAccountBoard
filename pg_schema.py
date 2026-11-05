@@ -4,7 +4,7 @@ from pathlib import Path
 
 MIGRATIONS = Path(__file__).resolve().parent / 'migrations/postgresql'
 FILES = ('0001_legacy_baseline.sql', '0002_office_scope.sql', '0003_idempotency.sql', '0004_device_workflow.sql',
-         '0005_employee_cards.sql', '0006_publish_review.sql')
+         '0005_employee_cards.sql', '0006_publish_review.sql', '0007_table_sync.sql')
 
 
 def expected_versions():
@@ -12,12 +12,12 @@ def expected_versions():
 
 
 def runtime_versions_supported(rows):
-    """Complete reviewed v4/v5/v6 schemas only; extensions stay disabled until applied.
+    """Complete reviewed v4/v5/v6/v7 schemas only; extensions stay disabled until applied.
 
     Hashes of every installed migration must match. Startup never applies DDL.
     """
     expected = expected_versions()
-    return list(rows) in (expected[:4], expected[:5], expected)
+    return list(rows) in (expected[:4], expected[:5], expected[:6], expected)
 
 
 def validate_extensions(db, rows):
@@ -31,6 +31,10 @@ def validate_extensions(db, rows):
         import publish_review
         if not publish_review.available(db):
             raise ValueError('Publish-review schema incomplete')
+    if installed >= 7:
+        import table_sync
+        if not table_sync.available(db):
+            raise ValueError('Table-sync schema incomplete')
 
 
 

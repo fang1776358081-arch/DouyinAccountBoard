@@ -14,6 +14,9 @@ function applyPermissions(){
    $('autoCollect').checked=false;
    $('collectionInfo').textContent='采集暂未启用 · 已有数量、时间、错误和任务记录保留';
  }
+ const collectionReason=data.collection?.enabled===false?'采集暂未启用；已有数量、时间和历史记录保留':!hasPermission('collection_manage')?'需要作品采集管理权限':'';
+ for(const id of ['pauseCollect','cancelCollect','collectSelected','collectVisible','autoCollect','resumeCollect','openCollector'])$(id).title=collectionReason;
+ for(const button of document.querySelectorAll('[data-collect]'))button.title=collectionReason;
  if(!hasPermission('account_progress'))for(const select of document.querySelectorAll('[data-aux-status],[data-readiness-id]'))select.disabled=true;
 }
 function applyAccountPermissions(account){

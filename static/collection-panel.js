@@ -8,9 +8,13 @@ async function refreshCollectionPanel(){
     const response=await fetch('/api/collection/status');
     if(!response.ok)throw Error(response.status===401?'请登录后查看采集进度':'读取采集进度失败');
     const result=await response.json(),c=result.collection;
+    const actions=document.getElementById('workCollectionPause').closest?.('.collection-actions');
+    if(actions)actions.hidden=false;
     document.getElementById('workCollectionInfo').textContent=collectionPanelText(c);
     document.getElementById('workCollectionPause').disabled=c.enabled===false||!result.can_manage;
     document.getElementById('workCollectionResume').disabled=c.enabled===false||!result.can_manage;
+    const reason=c.enabled===false?'采集暂未启用；历史记录保留':!result.can_manage?'需要作品采集管理权限':'';
+    for(const id of ['workCollectionPause','workCollectionResume'])document.getElementById(id).title=reason;
     document.getElementById('workCollectionResume').hidden=!c.paused&&c.worker_status!=='等待手动登录或验证';
     return c.enabled!==false;
   }catch(error){document.getElementById('workCollectionInfo').textContent=error.message;return true;}

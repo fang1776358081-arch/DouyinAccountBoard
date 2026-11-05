@@ -19,6 +19,7 @@ import account_transport
 import heavy_work
 import collection
 import publish_review
+import table_sync
 import account_lifecycle
 import backup
 import phone_cards
@@ -176,6 +177,7 @@ def initialize():
         device_workflow.migrate(db)
         employee_cards.migrate(db)
         publish_review.migrate(db)
+        table_sync.migrate(db)
         nurture.sync(db,today())
         # Collection is disabled; retained task states are historical, not executable leases.
 
@@ -294,7 +296,7 @@ class Handler(SimpleHTTPRequestHandler):
         headers=list(headers or [])
         coding=None
         if (status==200 and getattr(self,'command','GET')=='GET'
-                and urlparse(getattr(self,'path','')).path in ('/api/board','/api/employee-cards','/api/publish-review')
+                and (urlparse(getattr(self,'path','')).path in ('/api/board','/api/employee-cards','/api/publish-review') or urlparse(getattr(self,'path','')).path.startswith('/api/table-sync'))
                 and not any(key.lower()=='content-encoding' for key,_ in headers)):
             request_headers=getattr(self,'headers',{})
             encoding_values=request_headers.get_all('Accept-Encoding') if hasattr(request_headers,'get_all') else None
@@ -360,6 +362,16 @@ class Handler(SimpleHTTPRequestHandler):
     def get_response(self):
         self._board_timing=None
         parsed = urlparse(self.path)
+        if parsed.path == '/api/table-sync' or parsed.path.startswith('/api/table-sync/'):
+            try:
+                with connect() as db:
+                    begin_read(db)
+                    actor=auth.session(db,self.headers.get('Cookie'));auth.require(actor)
+                    return self.reply(table_sync.get(db,actor,parsed.path,parse_qs(parsed.query),today()),include_versions=False)
+            except auth.AccessError as error:return self.reply({'error':str(error)},error.status,include_versions=False)
+            except table_sync.RequestNotFound as error:return self.reply({'error':str(error),'code':error.code},error.status,include_versions=False)
+            except idempotency.IdempotencyError as error:return self.reply({'error':str(error),'code':error.code},error.status,include_versions=False)
+            except (ValueError,KeyError) as error:return self.reply({'error':str(error)},400,include_versions=False)
         if parsed.path=='/api/publish-review':
             with connect() as db:
                 begin_read(db)
@@ -801,7 +813,7 @@ class Handler(SimpleHTTPRequestHandler):
             return self.reply({'error':'需要 JSON 请求'}, 400)
         try:
             size = int(self.headers.get('Content-Length',0))
-            if not 0 < size <= (12*1024*1024 if self.path in ['/api/workspace/import-preview','/api/workspace/office-three-import-preview','/api/workspace/nurture/upload'] else 100000):
+            if not 0 < size <= (12*1024*1024 if self.path in ['/api/workspace/import-preview','/api/workspace/office-three-import-preview','/api/workspace/nurture/upload','/api/table-sync/preview'] else 100000):
                 raise ValueError('请求过大或为空')
             try:
                 raw = self.rfile.read(size)
@@ -824,6 +836,12 @@ class Handler(SimpleHTTPRequestHandler):
                     actor=auth.session(db,self.headers.get('Cookie'));auth.require(actor)
                     if not auth.hmac.compare_digest(self.headers.get('X-CSRF-Token',''),actor['csrf']):raise auth.AccessError('页面已过期，请刷新后重试')
                     auth.authorize_route(db,actor,self.path,body)
+                    if self.path.startswith('/api/table-sync/'):
+                        if not table_sync.available(db):return self.reply({'error':'表格同步的数据结构尚未升级，现有资料未改变','code':'TABLE_SYNC_SCHEMA_REQUIRED'},503,include_versions=False)
+                        result=table_sync.post(db,actor,self.path,body,today())
+                        db.commit()
+                        board_updates.notify_committed()
+                        return self.reply(result,include_versions=False)
                     if self.path in ('/api/publish-review/task','/api/publish-review/sample'):
                         if not publish_review.available(db):return self.reply({'error':'发布核对的数据结构尚未升级','code':'PUBLISH_REVIEW_SCHEMA_REQUIRED'},503)
                         result=publish_review.post(db,actor,self.path,body)

@@ -7,6 +7,7 @@ function applyRemoteBoardUpdate(update){
  if(update.record_version)data.record_versions={...(data.record_versions||{}),['account:'+account.id]:update.record_version};
 }
 function boardData(){if(typeof data!=='undefined'&&data)return data;return globalThis.data;}
+function boardPilotScope(){return typeof activeOffice!=='undefined'&&activeOffice==='three';}
 function boardEditorOpen(){
  const lookup=typeof $==='function'?$:id=>document.getElementById(id);
  return !!globalThis.DeviceWorkflow?.isOpen()||document.querySelector?.('dialog[open]')?.open===true||['editor','cardEditor','phoneDeviceEditor','publishingMatchDialog','verificationEditor','batchEditor'].some(id=>lookup(id)?.open);
@@ -29,6 +30,7 @@ function sameBoardValue(left,right){return JSON.stringify(left)===JSON.stringify
 function boardChangeMode(change,state){
  if(!change||typeof change.entity!=='string')return 'reload';
  const entity=change.entity,after=change.after;
+ if(entity.startsWith('account-source:'))return after&&after.account_id===entity.slice(15)?'source':'reload';
  if(entity.startsWith('daily:')){
   const rest=entity.slice(6),split=rest.lastIndexOf(':'),id=rest.slice(0,split),day=rest.slice(split+1);
   if(split<1||!/^\d{4}-\d{2}-\d{2}$/.test(day))return 'reload';
@@ -80,7 +82,8 @@ async function catchUpBoard(options={}){
  if(catchUpFlight){watchBoardFlight(catchUpFlight,options.signal);return catchUpFlight.promise;}
  if(boardSyncBlocked())return {status:'deferred'};
  const view=typeof page==='undefined'?'board':page;
- const result=(status,extra={})=>({status,...extra,...(view==='accounts'&&['waiting','deferred'].includes(status)?{nextDelayMs:250}:{})});
+ const pilot=boardPilotScope();
+ const result=(status,extra={})=>({status,...extra,...(pilot?{nextDelayMs:12000}:view==='accounts'&&['waiting','deferred'].includes(status)?{nextDelayMs:250}:{})});
  const requested=state.cursor,serial=boardSerial(),epoch=boardEpoch(),day=state.date,flight={cancelled:false,cleanups:[],promise:null};
  const active=()=>!flight.cancelled&&!options.signal?.aborted&&(!options.isCurrent||options.isCurrent());
  const isCurrent=()=>active()&&boardData()===state&&boardSerial()===serial&&boardEpoch()===epoch&&state.cursor===requested&&state.date===day&&(typeof page==='undefined'||page===view)&&!boardSyncBlocked();
@@ -92,7 +95,7 @@ async function catchUpBoard(options={}){
  }
  catchUpFlight=flight;watchBoardFlight(flight,options.signal);
  flight.promise=(async()=>{
-  const response=await fetch('/api/board-updates?cursor='+requested+'&limit=200'+(view==='accounts'?'&wait=5':''),options.signal?{signal:options.signal}:undefined);
+  const response=await fetch('/api/board-updates?cursor='+requested+'&limit=200'+(view==='accounts'&&!pilot?'&wait=5':''),options.signal?{signal:options.signal}:undefined);
   if(response.status===401){if(typeof clearBoardCache==='function')clearBoardCache();location.replace(location.search==='?office=three'?'/login.html?next='+encodeURIComponent('/?office=three'):'/login.html');throw boardSyncFailure(401,'登录已失效，请重新登录');}
   if(!response.ok&&response.status!==404)throw boardSyncFailure(response.status,'读取更新失败');
   if(!isCurrent())return result(boardSyncBlocked()?'deferred':'waiting');
@@ -106,18 +109,23 @@ async function catchUpBoard(options={}){
   if(!payload||!Number.isInteger(payload.cursor)||payload.cursor<requested||payload.reload!==true&&!Array.isArray(payload.changes))throw boardSyncFailure(undefined,'更新响应格式不正确');
   if(payload.reload===true||payload.changes.some(change=>boardChangeMode(change,state)==='reload'))return reload();
   const changes=payload.changes.filter(change=>boardChangeMode(change,state)==='patch');
+  if(payload.changes.some(change=>boardChangeMode(change,state)==='source'||change.entity.startsWith('account:'))){
+   const sourceReady=await globalThis.AccountPilot?.refreshSources?.();
+   if(sourceReady===false&&globalThis.AccountPilot?.enabled?.())throw boardSyncFailure(undefined,'来源字段同步失败，将保留同步记号后重试');
+  }
+  if(!isCurrent())return result(boardSyncBlocked()?'deferred':'waiting');
   for(const change of changes)applyCaughtChange(change);
   globalThis.AccountInline?.acceptBoard(changes);
   const cursorChanged=payload.cursor!==requested;state.cursor=payload.cursor;
   if(changes.length&&typeof render==='function')render();
   if((changes.length||cursorChanged)&&typeof writeBoardCache==='function')writeBoardCache();
-  return {status:changes.length?'updated':'idle',changes:changes.length,...(view==='accounts'&&payload.wait_supported===true?{nextDelayMs:250}:{})};
+  return {status:changes.length?'updated':'idle',changes:changes.length,...(pilot?{nextDelayMs:12000}:view==='accounts'&&payload.wait_supported===true?{nextDelayMs:250}:{})};
  })().finally(()=>{for(const cleanup of flight.cleanups)cleanup();if(catchUpFlight===flight)catchUpFlight=null;});
  return flight.promise;
 }
 function startBoardLiveSync(){
  if(typeof window==='undefined'||!window.LiveSync||window.boardLiveSync)return;
- const controller=window.LiveSync.create({ready:()=>!!boardData()&&Number.isInteger(boardData().cursor),blocked:()=>boardSyncBlocked(),run:options=>catchUpBoard(options),onState:state=>window.LiveSync.status('boardSyncState',state),intervalMs:5000});
+ const controller=window.LiveSync.create({ready:()=>!!boardData()&&Number.isInteger(boardData().cursor),blocked:()=>boardSyncBlocked(),run:options=>catchUpBoard(options),onState:state=>window.LiveSync.status('boardSyncState',state),intervalMs:boardPilotScope()?12000:5000});
  window.boardLiveSync=controller;const retry=document.getElementById('boardSyncRetry');if(retry)retry.onclick=()=>controller.poke();
  controller.start();
 }

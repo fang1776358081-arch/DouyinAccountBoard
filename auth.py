@@ -295,6 +295,11 @@ def require_stored_action(user, path):
 
 
 def authorize_route(db,user,path,body):
+    if path.startswith('/api/table-sync/'):
+        # This module owns strict pilot/snapshot/office checks; new batch writes
+        # never inherit the generic import or account-management permissions.
+        require(user,'owner')
+        return
     if path in ('/api/employee-cards/preview','/api/employee-cards/apply'):
         # The service independently rechecks employee/card scope and owner-only
         # configuration. These routes never mutate the legacy card record.

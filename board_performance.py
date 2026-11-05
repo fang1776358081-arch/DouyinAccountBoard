@@ -6,7 +6,7 @@ import os
 import time
 
 
-BUILD_ID = 'employee-card-name-match-20261103-r1'
+BUILD_ID = 'office-pilot-redesign-20261104-r1'
 
 
 PHASES = frozenset(('connect', 'transaction_close', 'read_begin', 'auth', 'auth_meta',
