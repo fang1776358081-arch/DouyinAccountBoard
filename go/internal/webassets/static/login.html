@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f4f6fa">
+  <title>登录 · 抖音账号工作台</title>
+  <link rel="stylesheet" href="/auth.css">
+  <link rel="stylesheet" href="/login-theme.css?v=20261111-compact1">
+</head>
+<body class="login-page enterprise-login">
+  <main class="login-layout">
+    <section class="login-box" aria-labelledby="loginTitle">
+        <div class="login-brand">
+          <span class="login-brand-mark" aria-hidden="true">矩</span>
+          <strong>抖音账号工作台</strong>
+        </div>
+        <h1 id="loginTitle">登录工作台</h1>
+        <p id="loginHint">每人独立登录，共用一份工作数据。</p>
+        <form id="loginForm">
+          <label id="setupKeyField" for="loginSetupKey" hidden>本机首次设置密钥<input id="loginSetupKey" type="password" maxlength="256" autocomplete="off"></label>
+          <label id="setupName" for="loginName" hidden>你的姓名<input id="loginName" maxlength="60" autocomplete="name"></label>
+          <label for="loginUsername">登录名<input id="loginUsername" required minlength="3" maxlength="40" pattern="[A-Za-z0-9_.\-]+" autocomplete="username" placeholder="字母或数字，例如 admin"></label>
+          <label for="loginPassword">密码<input id="loginPassword" type="password" required minlength="10" maxlength="128" autocomplete="current-password" placeholder="至少10位"></label>
+          <label id="confirmField" for="loginConfirm" hidden>确认密码<input id="loginConfirm" type="password" minlength="10" maxlength="128" autocomplete="new-password"></label>
+          <p id="loginError" role="alert"></p>
+          <button id="loginSubmit" type="submit">登录</button>
+        </form>
+
+    </section>
+  </main>
+  <script src="/login.js?v=20261111-workbench"></script>
+</body>
+</html>

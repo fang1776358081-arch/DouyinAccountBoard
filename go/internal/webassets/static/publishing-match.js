@@ -1,0 +1,74 @@
+let matchingCell=null,matchingBatch=null,matchingAccountId=null;
+function publishingCandidateScope(account,cell=matchingCell){
+ if(data.user?.scope_mode){const offices=account.office_ids||[],computer=data.computers.find(row=>row.id===cell?.computer_id);return offices.length===1&&computer?.office_ids?.length===1&&offices[0]===computer.office_ids[0];}
+ return (account.office_group==='three'||String(account.phone_device_id||'').startsWith('office3:'))===String(cell?.computer_id||'').startsWith('office3:');
+}
+function publishingCandidatePositions(id){return data.publishing_layout.cells.filter(cell=>cell.account_id===id&&!(cell.computer_id===matchingCell.computer_id&&cell.slot===matchingCell.slot));}
+function publishingLabelHandle(label){return String(label||'').trim().match(/^(?:抖音号|douyin_id)\s*[:：]\s*([A-Za-z0-9_.-]{2,100})$/)?.[1]||'';}
+// Similarity only ranks suggestions; account identity still needs explicit confirmation.
+function publishingNameCore(value){return String(value||'').normalize('NFKC').replace(/^\s*[.。]?\s*\d+(?:号手机|多开(?:抖音)?|小号)?\s*[-—－–]/,'').replace(/[(（]\s*\d+\s*(?:个)?\s*[)）]\s*$/,'').replace(/[\s·,，.。_-]/g,'').toLowerCase();}
+function publishingNameDistance(left,right){
+ const a=Array.from(left),b=Array.from(right);let row=Array.from({length:b.length+1},(_,i)=>i);
+ for(let i=0;i<a.length;i++){const next=[i+1];for(let j=0;j<b.length;j++)next.push(Math.min(next[j]+1,row[j+1]+1,row[j]+(a[i]===b[j]?0:1)));row=next;}
+ return row[b.length];
+}
+function publishingSuggestion(account,cell=matchingCell){
+ const label=String(cell?.label||''),prefix=label.match(/^\s*[.。]?\s*(\d+)(?:号手机|多开(?:抖音)?|小号)?\s*[-—－–]/);
+ const left=publishingNameCore(label),right=publishingNameCore(account.name),distance=publishingNameDistance(left,right),length=Math.max(left.length,right.length);
+ const samePhone=!!prefix&&deviceNumberMatches(account.phone_device_id,prefix[1]);
+ const exact=!!left&&left===right,similar=Math.min(left.length,right.length)>=5&&distance<=2&&distance/length<=0.3;
+ return {recommended:samePhone&&(exact||similar),samePhone,exact,distance,phone:prefix?.[1]||''};
+}
+function publishingCandidates(){
+ const phone=searchValue('matchPhoneQuery'),id=searchValue('matchIdQuery').replace(/^#/,''),name=searchValue('matchNameQuery');
+ const handle=$('matchDouyinQuery').value.trim(),sourceHandle=publishingLabelHandle(matchingCell?.label);
+ return data.accounts.filter(account=>publishingCandidateScope(account)&&deviceNumberMatches(account.phone_device_id,phone)&&exactText(account.id,id)&&containsText(account.name,name)&&(!handle||account.douyin_id===handle))
+  .map(account=>({account,exactHandle:sourceHandle!==''&&account.douyin_id===sourceHandle,suggestion:sourceHandle?null:publishingSuggestion(account)}))
+  .sort((left,right)=>{
+   if(sourceHandle)return Number(right.exactHandle)-Number(left.exactHandle);
+   const x=left.suggestion,y=right.suggestion;
+   return Number(y.recommended)-Number(x.recommended)||Number(y.samePhone)-Number(x.samePhone)||(x.recommended&&y.recommended?x.distance-y.distance:0);
+  }).map(({account})=>account);
+}
+function renderPublishingCandidates(){
+ matchingAccountId=null;$('matchSelection').textContent='请选择一个账号，再点击确认关联。';$('confirmPublishingMatch').disabled=true;
+ const choices=publishingCandidates(),sourceHandle=publishingLabelHandle(matchingCell?.label);
+ const phone=String(matchingCell?.label||'').match(/^\s*[.。]?\s*(\d+)(?:号手机|多开(?:抖音)?|小号)?\s*[-—－–]/)?.[1];
+ const sourceHint=sourceHandle?'原文标有完整抖音号，清空搜索可查看其他候选。':phone?'原文手机'+phone+'仅作排序线索。':'';
+ $('matchCount').textContent=`找到 ${choices.length} 个账号，最多显示 40 个。${sourceHint}${sourceHandle?'':'可输入完整抖音号查找。'}${searchValue('matchPhoneQuery')?'手机信息待核对的账号不会匹配，可清空手机序号。':''}请核对后确认。`;
+ $('matchCandidates').innerHTML=choices.slice(0,40).map(account=>{
+  const positions=publishingCandidatePositions(account.id),suggestion=sourceHandle?null:publishingSuggestion(account);
+  const badge=sourceHandle&&account.douyin_id===sourceHandle?'抖音号与原文一致':suggestion?.recommended?`${suggestion.exact?'名称一致':'近似建议'} · 同手机${suggestion.phone}${suggestion.exact?'':' · 名称相差'+suggestion.distance+'字'}`:'';
+  return `<tr><td><input type="radio" name="publishingAccount" aria-label="选择账号 ${esc(account.name)}" value="${esc(account.id)}" ${positions.length?'disabled':''}></td><td><strong>${esc(accountDisplay(account))}</strong>${badge?`<small class="badge ${positions.length?'':'good'}">${esc(badge)}</small>`:''}<small>${esc(account.account_type||'待确认')} · ${esc(account.status)}</small></td><td>${esc(accountDeviceDisplay(account,data)||'手机信息待核对')}</td><td>${esc(account.douyin_id||'未填写')}</td><td>${positions.length?`已有安排：${positions.map(cell=>esc(cell.source_cell)).join('、')}，不可重复关联`:'可选择'}</td></tr>`;
+ }).join('')||'<tr><td colspan="5">没有符合条件的账号。可清空搜索再查找。</td></tr>';
+}
+function openPublishingMatch(computer,slot){
+ if(!hasPermission('publishing_manage'))return toast('当前账号没有管理发布格子关联权限');
+ const cell=data.publishing_layout.cells.find(cell=>cell.computer_id===computer&&cell.slot===slot);
+ if(!cell||!cell.label||(cell.account_id&&!cell.manual_link))return;
+ matchingCell={...cell};matchingBatch=data.publishing_layout.batch;
+ const host=data.computers.find(host=>host.id===computer),current=data.accounts.find(account=>account.id===cell.account_id);
+ $('matchTitle').textContent=`${cell.source_cell} · ${cell.account_id?'调整手动关联':'关联待匹配账号'}`;
+ $('matchOriginal').textContent=`${host?.name||computer} / 发布设备 ${slot} · 原文：${cell.label}`;
+ $('matchCurrent').textContent=current?`当前关联：${accountDisplay(current)}`:`未匹配原因：${cell.reason||'需核对账号身份'}`;
+ ['matchPhoneQuery','matchIdQuery','matchNameQuery','matchDouyinQuery'].forEach(id=>$(id).value='');
+ if(!cell.account_id)$('matchDouyinQuery').value=publishingLabelHandle(cell.label);
+ // A visible account can legitimately have its inaccessible phone relation
+ // redacted. Source text is a ranking hint, never an implicit phone filter.
+ $('clearPublishingMatch').hidden=!cell.manual_link;$('matchError').textContent='';renderPublishingCandidates();$('publishingMatchDialog').showModal();captureVersions('publishingMatchDialog');
+}
+async function savePublishingMatch(action,button){
+ if(action==='link'&&!matchingAccountId)return;
+ button.disabled=true;$('matchError').textContent='';
+ const requestKey='publishing-link:'+matchingCell.computer_id+':'+matchingCell.slot+':'+action;
+ try{await api('/api/publishing/link',{batch:matchingBatch,computer_id:matchingCell.computer_id,slot:matchingCell.slot,expected_account_id:matchingCell.account_id,action,account_id:matchingAccountId,request_id:claimRequestId(requestKey)});settleRequestId(requestKey);$('publishingMatchDialog').close();await load();toast(action==='clear'?'已取消手动关联，恢复待匹配':'已关联，发布看板已更新');}catch(error){settleRequestId(requestKey,error);$('matchError').textContent=error.message;}finally{button.disabled=false;}
+}
+document.addEventListener('DOMContentLoaded',()=>{
+ document.addEventListener('click',event=>{const button=event.target.closest('[data-match-computer]');if(button)openPublishingMatch(button.dataset.matchComputer,Number(button.dataset.matchSlot));});
+ ['matchPhoneQuery','matchIdQuery','matchNameQuery','matchDouyinQuery'].forEach(id=>$(id).oninput=renderPublishingCandidates);
+ $('resetMatchSearch').onclick=()=>{['matchPhoneQuery','matchIdQuery','matchNameQuery','matchDouyinQuery'].forEach(id=>$(id).value='');renderPublishingCandidates();};
+ $('closePublishingMatch').onclick=()=>$('publishingMatchDialog').close();
+ $('matchCandidates').onchange=event=>{if(event.target.name!=='publishingAccount')return;const account=data.accounts.find(account=>account.id===event.target.value);if(!account)return;matchingAccountId=account.id;$('matchSelection').textContent=`确认将 ${matchingCell.source_cell}「${matchingCell.label}」关联到「${account.name}」，抖音号 ${account.douyin_id||'未填写'}，登录手机 ${accountDeviceDisplay(account,data)||'未关联'}。`;$('confirmPublishingMatch').disabled=false;};
+ $('publishingMatchForm').onsubmit=event=>{event.preventDefault();savePublishingMatch('link',event.submitter);};
+ $('clearPublishingMatch').onclick=()=>savePublishingMatch('clear',$('clearPublishingMatch'));
+});

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>作品采集 · 账号工作台</title>
+  <link rel="stylesheet" href="/styles.css?v=20261026">
+  <link rel="stylesheet" href="/console-theme.css?v=20261111-workbench">
+  <link rel="stylesheet" href="/collection-console.css?v=20261111-workbench">
+</head>
+<body class="console-page collection-console">
+  <aside>
+    <div class="brand"><span class="brand-icon">矩</span><div>账号工作台</div></div>
+    <nav class="side-nav workbench-nav" aria-label="主导航"></nav>
+  </aside>
+  <main>
+    <header>
+      <div><div class="eyebrow">日常工作 / 作品采集</div><h1>作品采集</h1></div>
+      <div class="collection-toolbar"><button class="button" id="collectionRefresh">刷新</button><a class="button primary" href="/?page=accounts" id="collectionAccountLink" hidden>选择账号采集</a></div>
+    </header>
+    <p id="collectionNotice" role="status">正在读取采集队列…</p>
+    <p id="collectionError" role="alert" hidden></p>
+    <section class="workspace collection-sheet" id="collectionSheet" aria-label="采集队列" hidden>
+      <div class="collection-toolbar">
+        <label>采集状态<select id="collectionState"><option value="">全部</option><option value="pending">待采集</option><option>采集成功</option><option>采集失败</option><option>需要验证</option><option>已取消</option></select></label>
+        <span id="collectionTotal"></span>
+        <details class="collection-controls" id="collectionControls" hidden>
+          <summary>队列设置</summary>
+          <div class="collection-toolbar">
+            <button class="button" data-collection-command="open_browser">打开采集浏览器</button>
+            <button class="button" data-collection-command="resume">继续队列</button>
+            <button class="button" data-collection-command="pause">暂停队列</button>
+            <button class="button" data-collection-command="cancel_waiting">取消等待任务</button>
+          </div>
+        </details>
+      </div>
+      <div class="collection-table-scroll" tabindex="0" role="region" aria-label="采集记录列表">
+        <table class="collection-table">
+          <thead><tr><th>账号</th><th>采集状态</th><th>作品数</th><th>最近成功</th><th>操作</th></tr></thead>
+          <tbody id="collectionRows"></tbody>
+        </table>
+      </div>
+      <div class="collection-toolbar collection-pagination" id="collectionPagination" hidden>
+        <button class="button" id="collectionPrevious">上一页</button><span id="collectionPage"></span><button class="button" id="collectionNext">下一页</button>
+      </div>
+    </section>
+    <dialog id="collectionCancelDialog" aria-labelledby="collectionCancelTitle">
+      <form method="dialog">
+        <h2 id="collectionCancelTitle">取消等待任务</h2>
+        <p>取消所有办公室还没开始的任务。正在采集的任务会继续，已有作品数会保留。</p>
+        <div class="collection-toolbar"><button class="button" value="keep" autofocus>保留任务</button><button class="button primary" value="cancel">确认取消</button></div>
+      </form>
+    </dialog>
+  </main>
+  <script src="/workbench-nav.js?v=20261111-workbench"></script>
+  <script src="/collection-console.js?v=20261111-workbench"></script>
+</body>
+</html>

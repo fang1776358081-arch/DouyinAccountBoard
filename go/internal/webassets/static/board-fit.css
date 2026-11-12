@@ -1,0 +1,141 @@
+/* Daily publishing layout. The shared account and inventory pages keep their own styles. */
+body.board-fit > main {
+ max-width: none;
+ padding: 20px 22px 28px;
+}
+body.console-page.board-fit main > header { margin-bottom: 8px; }
+body.board-fit .user-bar { margin-bottom: 6px; }
+body.board-fit .live-sync-bar { margin-bottom: 10px; }
+body.board-fit .office-workspace { margin-bottom: 12px; }
+body.board-fit .office-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+body.board-fit .office-tab { min-width: 0; min-height: 34px; padding: 6px 10px; }
+body.board-fit .office-tab strong { gap: 8px; font-size: 12px; }
+body.board-fit .office-tab small,
+body.board-fit #officeHint { display: none; }
+
+body.board-fit #stats { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+body.board-fit #stats .stat {
+ display: flex;
+ align-items: baseline;
+ gap: 8px;
+ padding: 5px 10px;
+ min-height: 0;
+ min-width: 0;
+ border-radius: 6px;
+ box-shadow: none;
+}
+body.board-fit #stats .stat:nth-child(-n+2),
+body.board-fit #stats .stat-symbol,
+body.board-fit #stats .stat small { display: none; }
+body.board-fit #stats .stat strong { font-size: 15px; line-height: 20px; margin: 0; }
+body.board-fit #stats .stat-label { margin: 0; font-size: 12px; }
+
+body.board-fit #accountWorkspace { min-width: 0; }
+body.board-fit #accountWorkspace > .account-filter-toolbar { padding: 10px 14px; }
+body.board-fit .account-common-filters {
+ display: grid;
+ grid-template-columns: repeat(5, minmax(95px, 1fr)) auto;
+ gap: 8px;
+ align-items: end;
+}
+body.board-fit .account-common-filters .field-search { min-width: 0; max-width: none; }
+body.board-fit .account-common-filters :is(input,select) { width: 100%; min-width: 0; }
+body.board-fit .account-filter-actions { flex-wrap: nowrap; gap: 6px; margin: 0; }
+body.board-fit .account-filter-actions .button { min-height: 32px; }
+body.board-fit .account-disclosures { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; }
+body.board-fit .account-disclosures > details { margin: 0; border: 0; padding: 0; }
+body.board-fit .account-disclosures > details[open] { flex-basis: 100%; }
+body.board-fit .account-disclosures summary { cursor: pointer; color: var(--ui-primary, #087f68); font-size: 12px; }
+body.board-fit #boardSecondaryActions { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+body.board-fit #boardSupplementBody .collection-bar { margin: 8px 0; }
+body.board-fit #accountWorkspace > .search-help,
+body.board-fit .account-active-filters:not(:has(button)),
+body.board-fit #accountWorkspace > .panel-heading .legend { display: none; }
+body.board-fit .account-active-filters { padding: 4px 14px; }
+body.board-fit #accountWorkspace > .panel-heading { padding: 10px 14px; }
+body.board-fit .board-actions {
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ flex-wrap: wrap;
+ gap: 6px;
+ padding: 2px 14px 8px;
+}
+body.board-fit .board-actions .batch-toolbar { flex: 1 1 auto; margin: 0; padding: 0; border: 0; background: transparent; }
+body.board-fit .board-actions .pending-review-entry { margin: 0 0 0 auto; padding: 0; }
+body.board-fit #pendingReviewToggle { min-height: 32px; }
+
+body.console-page.board-fit .matrix-scroll { width: 100%; max-width: 100%; overflow-x: auto; }
+body.console-page.board-fit .matrix { width: 100%; min-width: 0; table-layout: fixed; }
+body.board-fit .matrix th:first-child,
+body.board-fit .matrix td.host { width: 124px; min-width: 0; padding: 8px; }
+body.board-fit .matrix td.host { overflow-wrap: anywhere; }
+body.board-fit .matrix th:not(:first-child) { width: 110px; padding: 7px 5px; font-size: 12px; }
+body.board-fit .matrix td.publish-cell { min-width: 0; padding: 5px; vertical-align: top; }
+body.board-fit .matrix .account-card {
+ display: flex;
+ flex-direction: column;
+ align-items: stretch;
+ gap: 4px;
+ width: 100%;
+ min-width: 0;
+ max-width: 100%;
+ min-height: 0;
+ box-sizing: border-box;
+ padding: 7px;
+ border-radius: 7px;
+}
+body.board-fit .publish-cell-top { display: flex; align-items: flex-start; gap: 5px; }
+body.board-fit .publish-cell-top .board-batch-pick { flex: none; margin: 0; }
+body.board-fit .publish-cell-top input { width: 14px; height: 14px; margin: 2px 0 0; }
+body.console-page.board-fit .matrix .account-name {
+ min-width: 0;
+ font-size: 12px;
+ line-height: 17px;
+ overflow-wrap: anywhere;
+}
+body.board-fit .publish-cell-status { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+body.board-fit .matrix .badge { align-self: flex-start; padding: 1px 5px; font-size: 11px; line-height: 16px; white-space: normal; }
+body.board-fit .matrix .publish-toggle { flex: 1 1 100%; width: 100%; min-width: 0; min-height: 28px; padding: 3px 5px; font-size: 12px; }
+body.board-fit .publish-cell-exceptions { display: grid; gap: 4px; border-top: 1px solid var(--ui-border, #e4e7ec); padding-top: 4px; }
+body.board-fit .publish-cell-exceptions small {
+ display: -webkit-box;
+ -webkit-box-orient: vertical;
+ -webkit-line-clamp: 2;
+ overflow: hidden;
+ overflow-wrap: anywhere;
+ color: #714514;
+ font-size: 11px;
+ line-height: 16px;
+ white-space: normal;
+}
+body.board-fit .matrix .publish-review-action {
+ color: var(--ui-primary, #087f68);
+ text-align: left;
+ font-size: 12px;
+ min-height: 22px;
+ padding: 0;
+ line-height: 18px;
+ white-space: normal;
+ overflow-wrap: anywhere;
+}
+body.board-fit .matrix .unresolved-card:focus-visible { outline: 2px solid var(--ui-primary, #087f68); outline-offset: -2px; }
+body.board-fit .publish-cell-details { font-size: 11px; }
+body.board-fit .publish-cell-details > summary { color: var(--ui-primary, #087f68); cursor: pointer; padding: 2px 0; }
+body.board-fit .publish-cell-detail-actions { display: flex; flex-wrap: wrap; gap: 3px 8px; }
+body.board-fit .publish-cell-detail-actions :is(button, a),
+body.board-fit .publish-cell-details .verification-info { max-width: 100%; min-width: 0; font-size: 11px; overflow-wrap: anywhere; white-space: normal; }
+body.board-fit .publish-cell-details .card-count { display: block; white-space: normal; overflow-wrap: anywhere; }
+body.board-fit .matrix .unresolved-card { text-align: left; }
+body.board-fit .matrix .publish-pending-reason { font-size: 11px; line-height: 16px; overflow-wrap: anywhere; }
+body.board-fit .matrix .empty-slot { min-width: 0; min-height: 42px; padding: 8px; font-size: 11px; text-align: center; }
+
+@media (max-width: 1080px) {
+ body.board-fit .account-common-filters { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+ body.board-fit > main { padding: 14px 10px; }
+ body.board-fit .account-common-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+ body.board-fit .matrix th:first-child,
+ body.board-fit .matrix td.host { width: 95px; }
+}

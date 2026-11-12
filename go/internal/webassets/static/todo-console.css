@@ -1,0 +1,67 @@
+/* Compact task list. Other workspace tabs retain their existing layout. */
+body.console-page.todo-console > main { padding-top: 20px; }
+body.console-page.todo-console main > header { margin-bottom: 8px; padding-bottom: 8px; }
+.todo-console #workspaceUser { margin: 4px 0 0; }
+.todo-console .live-sync-bar { margin-bottom: 10px; }
+.todo-console #workspaceError:empty { display: none; }
+body.console-page.todo-console #workspaceBody {
+ padding: 0;
+ margin-bottom: 10px;
+ border: 0;
+ background: transparent;
+ box-shadow: none;
+}
+.todo-console .todo-toolbar {
+ align-items: end;
+ gap: 6px 12px;
+ margin: 0 0 10px;
+ padding: 8px 10px;
+ background: white;
+}
+.todo-console .todo-toolbar select { height: 32px; }
+.todo-result-count, .todo-date-note { align-self: center; font-size: 12px; color: #52657e; }
+.todo-date-note { margin-left: auto; }
+.todo-section, .todo-other-tasks, .todo-extra-actions {
+ margin: 0 0 10px;
+ background: white;
+ border: 1px solid var(--console-line, #e4e7ec);
+ border-radius: 8px;
+}
+.todo-section-head, :is(.todo-other-tasks, .todo-extra-actions) > summary {
+ margin: 0;
+ padding: 8px 12px;
+ font-size: 14px;
+ font-weight: 600;
+ color: #263c54;
+}
+.todo-section[data-todo-group="exceptions"] .todo-section-head { color: #8a5b19; }
+.todo-section-count { margin-left: 6px; font-size: 12px; font-weight: 500; color: #52657e; }
+:is(.todo-other-tasks, .todo-extra-actions) > summary { cursor: pointer; }
+:is(.todo-other-tasks, .todo-extra-actions) > summary:focus-visible {
+ outline: 2px solid #087f68;
+ outline-offset: -2px;
+}
+.todo-table > .account-scroll { min-height: 0; border: 0; border-radius: 0 0 8px 8px; }
+.todo-table .workspace-table { min-width: 550px; }
+.todo-console .todo-table .workspace-table :is(th, td) {
+ padding: 6px 12px;
+ line-height: 1.55;
+}
+.todo-table .workspace-table th:first-child { width: 24%; }
+.todo-table .workspace-table th:nth-child(2) { width: 18%; }
+.todo-table .workspace-table th:last-child { width: 125px; }
+.todo-console .todo-table .workspace-table td small { margin-top: 2px; line-height: 1.4; }
+.todo-record { font-weight: 600; overflow-wrap: anywhere; }
+.todo-record small { font-weight: 400; }
+.todo-table .workspace-table td:nth-child(3) { overflow-wrap: anywhere; }
+.todo-action :is(a, button) { display: inline-block; color: #087f68; font-size: 12px; padding: 3px 0; }
+.todo-action a { text-decoration: underline; text-underline-offset: 2px; }
+.todo-empty { padding: 6px 12px 10px; margin: 0; color: #52657e; font-size: 12px; }
+.todo-pagination[hidden], .todo-extra-actions[hidden] { display: none; }
+.todo-pagination { justify-content: end; padding: 6px 12px; }
+.todo-extra-actions .collection-bar { margin: 0; border-radius: 0 0 8px 8px; }
+.todo-extra-actions .pilot-workflow { margin: 0; padding: 8px 12px; border: 0; }
+@media (max-width: 700px) {
+ .todo-console .todo-toolbar label { flex: 1 1 calc(50% - 6px); min-width: 0; }
+ .todo-date-note { margin-left: 0; }
+}

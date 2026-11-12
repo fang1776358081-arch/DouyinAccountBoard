@@ -1,0 +1,47 @@
+.enterprise-login {
+  box-sizing: border-box;
+  min-height: 100dvh;
+  padding: 24px;
+  background: #f4f6fa;
+  color: #182b45;
+  font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.enterprise-login .login-layout { width: min(100%, 380px); }
+.enterprise-login .login-box {
+  width: 100%;
+  padding: 26px 28px;
+  border-color: #e3e8f0;
+  border-radius: 10px;
+  box-shadow: 0 10px 28px #182b450c;
+}
+
+.enterprise-login .login-brand { display: flex; align-items: center; gap: 9px; color: #182b45; }
+.enterprise-login .login-brand-mark {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  background: #087f68;
+  color: white;
+  border-radius: 7px;
+  font-size: 19px;
+}
+
+.enterprise-login .login-box h1 { font-size: 22px; margin: 18px 0 2px; }
+.enterprise-login #loginHint { margin: 0 0 16px; }
+.enterprise-login .login-box p { color: #607087; }
+.enterprise-login .login-box label { margin: 10px 0; }
+.enterprise-login .login-box input,
+.enterprise-login .login-box button { padding: 8px 10px; border-radius: 6px; }
+.enterprise-login .login-box input { border-color: #d6dee9; color: inherit; }
+.enterprise-login .login-box button { margin-top: 4px; background: #087f68; font-weight: 600; }
+.enterprise-login .login-box button:hover:not(:disabled) { background: #076d59; }
+.enterprise-login .login-box :is(input, button):focus-visible { outline: 2px solid #087f68; outline-offset: 2px; }
+.enterprise-login #loginError { margin: 8px 0; }
+.enterprise-login #loginError:empty { margin: 0; }
+
+@media (max-width: 480px) {
+  .enterprise-login { padding: 16px; }
+  .enterprise-login .login-box { padding: 20px; }
+}

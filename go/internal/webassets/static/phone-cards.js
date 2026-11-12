@@ -1,0 +1,92 @@
+let cardPageIndex=1;
+const cardPageSize=50;
+function cardCarrierLabel(card){return card.carrier==='其他'&&card.custom_carrier?card.custom_carrier:card.carrier||'待确认';}
+function cardCarrierOptions(){return [...new Set([...(data.phone_cards?.carriers||[]),'民生电信','长城移动'])];}
+function cardCustomCarrier(card){let label=$('cardEditCustomCarrierLabel');if(!label){label=document.createElement('label');label.id='cardEditCustomCarrierLabel';label.className='workflow-carrier-custom';label.innerHTML='其他运营商名称（选填）<input id="cardEditCustomCarrier" maxlength="40" placeholder="填写具体运营商名称">';$('cardEditCarrier').closest('.form-row').after(label);$('cardEditCarrier').addEventListener('change',()=>{label.hidden=$('cardEditCarrier').value!=='其他';});}if(card)$('cardEditCustomCarrier').value=card.custom_carrier||'';label.hidden=$('cardEditCarrier').value!=='其他';}
+function cardAccountLookup(){
+ if(typeof activeRenderIndex!=='undefined'&&activeRenderIndex)return activeRenderIndex;
+ const index={accountsByPhone:new Map(),unitsById:new Map((data.device_workflow?.units||[]).map(unit=>[String(unit.id),unit])),computersById:new Map(data.computers.map(computer=>[computer.id,computer]))};
+ for(const account of data.accounts){if(!index.accountsByPhone.has(account.registration_phone))index.accountsByPhone.set(account.registration_phone,[]);index.accountsByPhone.get(account.registration_phone).push(account);}
+ return index;
+}
+function cardAccounts(phone,index=null){return index?index.accountsByPhone.get(phone)||[]:data.accounts.filter(a=>a.registration_phone===phone);}
+function readinessEdit(a){$('editCardStability').value=a.card_stability||'待确认';$('editPasswordState').value=a.password_state||'待确认';}
+function readinessPayload(){return {card_stability:$('editCardStability').value,password_state:$('editPasswordState').value};}
+function cardReady(card,index=null,accounts=null){const related=accounts||cardAccounts(card.phone,index),active=related.filter(a=>a.status!=='封禁');return active.length>0&&related.some(a=>a.account_type==='小号')&&related.filter(a=>a.account_type==='大号').length<=1&&active.every(a=>['大号','小号'].includes(a.account_type)&&a.card_stability==='已稳定'&&a.password_state==='已修改');}
+function cardTaskMatches(c,index=null,task=$('cardTask').value){return !task||(task==='cancel'&&c.status==='待注销')||(task==='code'&&c.code_state==='待接码')||(task==='return'&&c.return_state==='待归还')||(task==='blocked'&&cardAccounts(c.phone,index).some(a=>a.status==='封禁'))||(task==='ready'&&cardReady(c,index))||(task==='review'&&/卡主标注不一致|已销户|已注销|卡注销|收不了/.test(c.source_note||''));}
+function cardExpiring(card){return !!card.expires_on&&card.expires_on<=new Date(Date.parse(data.today+'T00:00:00Z')+7*86400000).toISOString().slice(0,10);}
+function cardAttention(card, related) {
+ const reasons = [];
+ if (['欠费', '停机', '待注销'].includes(card.status)) reasons.push(card.status);
+ if (card.status !== '已注销' && related.some(account => account.status === '封禁')) reasons.push('关联账号封禁');
+ if (card.code_state === '待接码') reasons.push('待接码');
+ if (card.return_state === '待归还') reasons.push('待归还');
+ return reasons;
+}
+function filteredCards(index=null){
+ if(window.CardFilters)return CardFilters.filter(data,CardFilters.read(),index||cardAccountLookup());
+ const q=$('cardQuery').value.trim().toLowerCase(),locationQuery=searchValue('cardLocationQuery'),owner=searchValue('cardOwnerQuery'),label=searchValue('cardLabelQuery'),name=searchValue('cardAccountNameQuery'),status=$('cardStatus').value,carrier=$('cardCarrier').value,linked=$('cardLinked').value,expiry=$('cardExpiry').value,task=$('cardTask').value,needsRelated=!!(name||linked||task==='blocked'||task==='ready'),lookup=index||(needsRelated||locationQuery&&data.device_workflow?.enabled?cardAccountLookup():null);
+ return (data.phone_cards?.cards||[]).filter(c=>{
+  if(!containsText(c.phone,q)||!containsText(c.owner,owner)||!containsText(c.label,label)||(status&&c.status!==status)||(carrier&&c.carrier!==carrier&&cardCarrierLabel(c)!==carrier)||(expiry&&(expiry==='soon'?!cardExpiring(c):!!c.expires_on)))return false;
+  if(locationQuery){const located=data.device_workflow?.enabled&&c.placement?.unit_id,location=data.device_workflow?.enabled?(located?lookup.unitsById.get(String(c.placement.unit_id))?.device_id||'':c.placement?.storage||''):c.location;if(!(located?deviceNumberMatches(location,locationQuery):locationNumberMatches(location,locationQuery)))return false;}
+  const related=needsRelated?cardAccounts(c.phone,lookup):[];
+  return cardTaskMatches(c,lookup,task)&&(!name||related.some(a=>containsText(a.name,name)))&&(!linked||(related.length>0)===(linked==='yes'));
+ });
+}
+function renderCards(){
+ let scopeHost=$('cardImportScope');if(!scopeHost){scopeHost=document.createElement('div');scopeHost.id='cardImportScope';$('importCards').parentElement.after(scopeHost);}ScopeUI.mount('cardImportScope',data,'cards',{}, {importing:true});
+ const info=data.phone_cards||{cards:[],statuses:[],carriers:[],importable:0},lookup=cardAccountLookup();
+ if(window.CardFilters)CardFilters.prepare(data,lookup);
+ else for(const [id,options,label] of [['cardStatus',info.statuses,'全部手机卡状态'],['cardCarrier',[...new Set([...cardCarrierOptions(),...info.cards.map(cardCarrierLabel)])],'全部运营商']]){const value=$(id).value;$(id).innerHTML=`<option value="">${label}</option>`+options.map(s=>`<option>${esc(s)}</option>`).join('');$(id).value=value;}
+ $('title').textContent='手机卡管理';$('breadcrumb').textContent='手机卡资料';$('subtitle').textContent='查看号码、卡主、当前插卡位置和关联账号。';
+ const all=window.CardFilters?CardFilters.scopeRows(data,CardFilters.read().cardOfficeFilter):info.cards;
+ $('stats').innerHTML='';
+ $('importCards').textContent=`从账号手机号补录（${info.importable}）`;$('importCards').disabled=info.importable===0;
+ const cards=filteredCards(lookup),pages=Math.max(1,Math.ceil(cards.length/cardPageSize));cardPageIndex=Math.min(Math.max(1,cardPageIndex),pages);
+ if(window.CardFilters)CardFilters.renderUI(data,lookup);
+ $('cardInlineHint').hidden=!(hasPermission('card_manage')||hasPermission('card_tasks'));
+ $('cardsScope').textContent=`显示 ${cards.length} / ${all.length} 张卡`;
+ $('cardsBody').innerHTML=cards.slice((cardPageIndex-1)*cardPageSize,cardPageIndex*cardPageSize).map(c=>{
+  const related=cardAccounts(c.phone,lookup),workflow=data.device_workflow?.enabled;
+  const position=window.CardFilters?CardFilters.position(c,lookup,data):null;
+  const location=workflow&&window.DeviceWorkflow?DeviceWorkflow.positionText(c):(position?.kind==='phone'||position?.kind==='storage'?position.value:workflow?'实物位置待核对':c.location||'位置待补充');
+  const status=c.status||'未登记（空白）',statusClass=({'待确认':'pending','正常':'normal','欠费':'overdue','停机':'suspended','停用':'inactive','待注销':'cancel-pending','已注销':'cancelled'})[c.status]||(c.status?'legacy':'blank');
+  const preview=related.slice(0,2).map(account=>account.name||'昵称待补充').join('、');
+  const badge=`<span class="badge card-status-${statusClass} ${c.status==='正常'?'good':['欠费','停机','待注销'].includes(c.status)?'warn':''}">${esc(status)}</span>`;
+  const owner=esc(c.owner||'卡主待核对'),reasons=cardAttention(c,related);
+  const locationText=workflow&&position?.kind!=='phone'&&position?.kind!=='storage'?'待核对':location;
+  return `<tr>
+   <td>${typeof batchPick==='function'?batchPick('cards',c.id):''}</td>
+   <td class="card-identity"><button type="button" class="text-button card-phone-link" data-card-details="${c.id}" aria-label="查看 ${esc(c.phone)} 详情">${esc(c.phone)}</button></td>
+   <td class="card-custody">${window.CardInline?.cell(c,'owner',owner)??owner}</td>
+   <td class="card-location">${esc(locationText)}${!workflow&&position?.kind==='source'?'<small>原表参考</small>':''}</td>
+   <td class="card-linked-preview">${related.length?`<button type="button" class="text-button" data-card-accounts="${esc(c.phone)}">${related.length} 个关联账号 ↗</button><small>${esc(preview)}${related.length>2?'…':''}</small>`:'<span class="muted">暂无关联</span>'}</td>
+   <td class="card-business-status">${window.CardInline?.cell(c,'status',badge)??badge}</td>
+   <td class="card-attention">${reasons.length?esc(reasons.join('、')):'<span class="muted">—</span>'}</td>
+  </tr>`;
+ }).join('')||`<tr><td colspan="7" class="empty-result">${all.length?`没有符合当前条件的手机卡。${window.CardFilters?esc(CardFilters.emptyReason(data,CardFilters.read(),lookup)):'请清除不需要的筛选条件。'}<div class="card-empty-actions"><button type="button" class="button" data-card-empty-reset>重置条件（保留办公室）</button></div>`:window.CardFilters?esc(CardFilters.emptyReason(data,CardFilters.read(),lookup)):'当前授权范围没有手机卡资料。可按权限新增录入，或从账号手机号补录。'}</td></tr>`;
+ $('cardsPage').textContent=`第 ${cardPageIndex} / ${pages} 页 · 每页 ${cardPageSize} 张`;$('cardsPrevious').disabled=cardPageIndex===1;$('cardsNext').disabled=cardPageIndex===pages;
+ if(typeof renderBatchControls==='function')renderBatchControls();
+}
+function editCard(id){
+ const card=data.phone_cards.cards.find(c=>c.id===id)||{};
+ $('cardId').value=card.id||'';$('cardEditTitle').textContent=card.id?'编辑手机卡':'新增手机卡';
+ for(const [input,key] of [['cardPhone','phone'],['cardLabel','label'],['cardOwner','owner'],['cardKeeper','keeper'],['cardCodeContact','code_contact'],['cardCodeNote','code_note'],['cardReturnDue','return_due'],['cardReturnedOn','returned_on'],['cardLocation','location'],['cardExpires','expires_on'],['cardNote','note']])$(input).value=card[key]||'';
+ for(const [input,options,value] of [['cardEditCarrier',cardCarrierOptions(),card.carrier],['cardEditStatus',data.phone_cards.statuses,card.status],['cardOwnership',data.phone_cards.ownerships,card.ownership],['cardCodeState',data.phone_cards.code_states,card.code_state],['cardReturnState',data.phone_cards.return_states,card.return_state]]){$(input).innerHTML=options.map(s=>`<option>${esc(s)}</option>`).join('');$(input).value=value||options[0];}
+ cardCustomCarrier(card);
+ let locationHint=$('cardWorkflowLocationHint');if(!locationHint){locationHint=document.createElement('p');locationHint.id='cardWorkflowLocationHint';locationHint.className='workflow-help';$('cardLocation').closest('label').after(locationHint);}locationHint.hidden=!data.device_workflow?.enabled;locationHint.innerHTML=data.device_workflow?.enabled?`此处保留原文字位置；实际插卡位置请通过独立记录核对。${card.id?`<button type="button" class="text-button" data-workflow-card="${card.id}">移卡 / 核对位置</button>`:'新增保存后，可登记实际插卡位置。'}`:'';
+ $('cardSourceNote').textContent=card.source_note||'暂无腾讯文档导入原文';renderCardLinked(card.phone);
+ $('cardEditError').textContent='';ScopeUI.mount('cardForm',data,'cards',card);$('cardEditor').showModal();captureVersions('cardEditor');applyCardPermissions();
+}
+function renderCardLinked(phone){$('cardLinkedAccounts').innerHTML=cardAccounts(phone).map(a=>`<div class="card-account-row"><strong>${esc(accountDisplay(a))} · ${esc(a.account_type)}</strong><small>账号状态：${esc(a.status)}</small><label>稳定情况<select data-readiness-id="${esc(a.id)}" data-readiness-field="card_stability" aria-label="账号 ${esc(a.id)} 稳定情况">${['待确认','未稳定','已稳定'].map(s=>`<option ${a.card_stability===s?'selected':''}>${s}</option>`).join('')}</select></label><label>改密情况<select data-readiness-id="${esc(a.id)}" data-readiness-field="password_state" aria-label="账号 ${esc(a.id)} 改密情况">${['待确认','未修改','已修改'].map(s=>`<option ${a.password_state===s?'selected':''}>${s}</option>`).join('')}</select></label></div>`).join('')||'<p class="card-help">暂无同注册手机号的账号。请先保存号码，并核对账号管理中的注册手机号。</p>';}
+document.addEventListener('DOMContentLoaded',()=>{
+ $('newCard').onclick=()=>editCard(null);$('closeCardEditor').onclick=()=>$('cardEditor').close();$('refreshCards').onclick=load;
+ const refreshFilters=()=>{if(window.CardFilters)CardFilters.refresh();else renderCards();};
+ cardSearchFields.forEach(id=>$(id).oninput=()=>{cardPageIndex=1;refreshFilters();});['cardStatus','cardCarrier','cardLinked','cardExpiry','cardTask'].forEach(id=>$(id).onchange=()=>{cardPageIndex=1;refreshFilters();});
+ $('clearCards').onclick=()=>{if(window.CardFilters)return CardFilters.reset(true);[...cardSearchFields,'cardStatus','cardCarrier','cardLinked','cardExpiry','cardTask'].forEach(id=>$(id).value='');cardPageIndex=1;renderCards();};
+ $('cardsPrevious').onclick=()=>{cardPageIndex--;refreshFilters();};$('cardsNext').onclick=()=>{cardPageIndex++;refreshFilters();};
+ $('importCards').onclick=async()=>{const button=$('importCards');button.disabled=true;const payload=ScopeUI.payload('cardImportScope');const requestKey='card-import:'+[...(payload.office_ids||[])].map(String).sort().join(',');payload.request_id=claimRequestId(requestKey);try{const result=await api('/api/phone-cards/import',payload);settleRequestId(requestKey);await load();toast(`已补录 ${result.added} 张卡，卡状态待确认`);}catch(e){settleRequestId(requestKey,e);toast(e.message);}finally{button.disabled=!data.phone_cards.importable;}};
+ $('cardsBody').onclick=e=>{const related=e.target.closest('[data-card-accounts]');if(related){activeOffice='all';clearAccountSearch();activeLifecyclePreset='';['computer','status','published','accountType','ageFilter','lifecycleFilter','loginPhoneFilter'].forEach(id=>$(id).value='');$('accountPhoneQuery').value=related.dataset.cardAccounts;selected.clear();page='accounts';render();}};
+ $('cardLinkedAccounts').onchange=async e=>{const select=e.target.closest('[data-readiness-id]');if(!select)return;select.disabled=true;const requestKey='readiness:'+select.dataset.readinessId+':'+select.dataset.readinessField;try{await api('/api/account/card-readiness',{id:select.dataset.readinessId,[select.dataset.readinessField]:select.value,request_id:claimRequestId(requestKey)});settleRequestId(requestKey);await load();renderCardLinked(data.phone_cards.cards.find(c=>c.id===Number($('cardId').value))?.phone||'');toast('账号稳定 / 改密记录已保存');}catch(error){settleRequestId(requestKey,error);toast(error.message);}finally{select.disabled=false;}};
+ $('cardForm').onsubmit=async e=>{e.preventDefault();const button=e.submitter;button.disabled=true;try{const payload={...ScopeUI.payload('cardForm'),id:$('cardId').value?Number($('cardId').value):null,phone:$('cardPhone').value,label:$('cardLabel').value,carrier:$('cardEditCarrier').value,custom_carrier:$('cardEditCarrier').value==='其他'?$('cardEditCustomCarrier').value.trim():'',status:$('cardEditStatus').value,owner:$('cardOwner').value,ownership:$('cardOwnership').value,keeper:$('cardKeeper').value,code_contact:$('cardCodeContact').value,code_state:$('cardCodeState').value,code_note:$('cardCodeNote').value,return_state:$('cardReturnState').value,return_due:$('cardReturnDue').value,returned_on:$('cardReturnedOn').value,location:$('cardLocation').value,expires_on:$('cardExpires').value,note:$('cardNote').value};if(payload.id&&!hasPermission('card_manage')){for(const key of Object.keys(payload))if(!['id','status','code_state','code_note','return_state','return_due','returned_on'].includes(key))delete payload[key];}const requestKey=payload.id?'card-update:'+payload.id:'card-create';payload.request_id=claimRequestId(requestKey);await api('/api/phone-card',payload);settleRequestId(requestKey);$('cardEditor').close();await load();toast('手机卡已保存');}catch(error){const cardId=Number($('cardId').value);settleRequestId(cardId?'card-update:'+cardId:'card-create',error);$('cardEditError').textContent=error.message;}finally{button.disabled=false;}};
+});
