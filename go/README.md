@@ -63,6 +63,8 @@ go vet -mod=readonly ./...
 
 真实 PostgreSQL 的测试需要一份独立合成库。初始化条件见 [基础夹具](internal/daily/testdata/fixture.sql)。设置测试包所需的合成库端口后，使用 `go test -p 1 -count=1 -mod=readonly ./...` 串行执行共用夹具的测试。
 
+正式 CloudBase 接入使用 `-cloudbase-postgres` 和现有服务的 `DOUYIN_BOARD_DATABASE_*` 环境及 TLS 配置，必须传入原网站的 `-origin`。启动先核对已安装迁移的校验值。测试该只读检查时，将 `BOARD_GO_SCHEMA_TEST_PORT` 和 `BOARD_GO_SCHEMA_TEST_DATABASE` 指向带有规范迁移账本的回环合成库。
+
 完整网页验收需要一份全新的测试库，可用 [夹具创建脚本](testdata/New-StandaloneFixture.ps1) 从已初始化的基础合成库创建。先在当前终端设置测试用户密码 `SYNTHETIC_FIXTURE_PASSWORD`，传入本机 `psql`、端口、合成模板库名以及以 `synthetic_go_standalone_` 开头的新库名。将 `BOARD_GO_PG_DSN` 指向刚创建的合成库，安装 Playwright 并提供 Chrome，运行以下命令。
 
 ```powershell

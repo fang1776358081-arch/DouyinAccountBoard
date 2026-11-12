@@ -53,6 +53,7 @@ func run() error {
 	listen := flag.String("listen", "127.0.0.1:8080", "Go server listen address")
 	legacy := flag.String("legacy", "", "Optional legacy application origin on loopback")
 	public := flag.String("origin", "", "Browser origin, required for non-loopback listeners and TLS termination")
+	cloudbase := flag.Bool("cloudbase-postgres", false, "Use the existing production CloudBase PostgreSQL environment")
 	initDatabase := flag.Bool("init-db", false, "Initialize an empty local PostgreSQL database and exit")
 	autoBackup := flag.Bool("auto-backup", false, "Enable scheduled PostgreSQL business snapshots")
 	showVersion := flag.Bool("version", false, "Print the Go workbench build ID and exit")
@@ -85,7 +86,28 @@ func run() error {
 	lifecycle, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	var db *sql.DB
-	if dsn := os.Getenv("BOARD_GO_PG_DSN"); dsn != "" {
+	dsn := os.Getenv("BOARD_GO_PG_DSN")
+	if *cloudbase {
+		if dsn != "" || legacyOrigin != nil || *public == "" || *initDatabase ||
+			os.Getenv("BOARD_GO_SETUP_KEY") != "" || os.Getenv("BOARD_GO_COLLECTION_TOKEN") != "" {
+			return errors.New("CloudBase 模式须配置原网站来源，不能同时使用本机连接串、旧版代理、初始化或采集")
+		}
+		config, err := parseCloudBaseConfig(os.Getenv)
+		if err != nil {
+			return err
+		}
+		db, err = connectDatabase(lifecycle, config, 8)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(lifecycle, 5*time.Second)
+		err = bootstrap.ValidateExisting(ctx, db)
+		cancel()
+		if err != nil {
+			return err
+		}
+	} else if dsn != "" {
 		db, err = openDatabase(lifecycle, dsn)
 		if err != nil {
 			return err
@@ -393,14 +415,18 @@ func openDatabase(ctx context.Context, dsn string) (*sql.DB, error) {
 			return nil, errors.New("PostgreSQL 备用地址必须是本机回环地址")
 		}
 	}
-	config.RuntimeParams["search_path"] = "board_candidate,pg_catalog"
 	config.ConnectTimeout = 4 * time.Second
+	return connectDatabase(ctx, config, 12)
+}
+
+func connectDatabase(ctx context.Context, config *pgx.ConnConfig, maxConnections int) (*sql.DB, error) {
+	config.RuntimeParams["search_path"] = "board_candidate,pg_catalog"
 	db := stdlib.OpenDB(*config)
-	db.SetMaxOpenConns(12)
+	db.SetMaxOpenConns(maxConnections)
 	db.SetMaxIdleConns(4)
 	db.SetConnMaxIdleTime(2 * time.Minute)
 
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, config.ConnectTimeout+time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()

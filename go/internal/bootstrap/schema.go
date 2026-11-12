@@ -16,6 +16,38 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
+// ValidateExisting checks the deployed migration ledger without initializing or updating it.
+func ValidateExisting(ctx context.Context, db *sql.DB) error {
+	names, err := fs.Glob(migrations, "migrations/*.sql")
+	if err != nil || len(names) < 4 {
+		return errors.New("无法读取当前构建的结构版本清单")
+	}
+	const mismatch = "CloudBase 数据库结构与当前构建不兼容"
+	rows, err := db.QueryContext(ctx, "SELECT version,sha256 FROM board_candidate.schema_migrations ORDER BY version")
+	if err != nil {
+		return errors.New(mismatch)
+	}
+	defer rows.Close()
+	count := 0
+	for rows.Next() {
+		var version int
+		var checksum string
+		if err := rows.Scan(&version, &checksum); err != nil || count >= len(names) || version != count+1 {
+			return errors.New(mismatch)
+		}
+		source, err := migrations.ReadFile(names[count])
+		digest := sha256.Sum256(source)
+		if err != nil || checksum != hex.EncodeToString(digest[:]) {
+			return errors.New(mismatch)
+		}
+		count++
+	}
+	if count < 4 || rows.Err() != nil {
+		return errors.New(mismatch)
+	}
+	return nil
+}
+
 func Initialize(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
