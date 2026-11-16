@@ -36,7 +36,19 @@ function newRequestId(){if(typeof crypto.randomUUID==='function')return crypto.r
 function claimRequestId(key){if(!pendingRequestIds.has(key))pendingRequestIds.set(key,newRequestId());return pendingRequestIds.get(key);}
 function settleRequestId(key,error){if(error&&error.status===undefined)return;pendingRequestIds.delete(key);}
 async function ensureVersions(path,body,source){if(!data||source&&frozenWorkspaceVersions.has(source))return;const keys=[...new Set(versionKeys(path,body,data.accounts||[],data))];const target=source||data.record_versions||{};const missing=keys.filter(key=>!Object.prototype.hasOwnProperty.call(target,key));for(let offset=0;offset<missing.length;offset+=80){const response=await fetch('/api/record-versions?keys='+encodeURIComponent(missing.slice(offset,offset+80).join(',')));if(response.status===401){location.replace('/login.html');const failure=Error('请重新登录');failure.status=401;throw failure;}const result=await response.json().catch(()=>({}));if(!response.ok){const failure=Error(result.error||'读取保存版本失败');failure.status=response.status;throw failure;}const versions=result.record_versions||{};if(source)Object.assign(source,versions);data.record_versions={...(data.record_versions||{}),...versions};}}
-async function sendOnce(path,body,source){if(body)await ensureVersions(path,body,source);const response=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-CSRF-Token':data?.user?.csrf||''}:{},body:body?JSON.stringify(versionPayload(path,body,data,source)):undefined});const result=await response.json();if(response.status===401){location.replace('/login.html');const failure=Error('请重新登录');failure.status=401;throw failure;}if(!response.ok){const failure=Error(result.error||'操作失败');failure.status=response.status;failure.code=result.code;throw failure;}if(data)applyVersionDelta(result._record_versions,data);return result;}
+async function sendOnce(path,body,source){
+ let payload=body;
+ if(body&&path!==businessCleanupPreviewPath&&path!==businessCleanupApplyPath){
+  await ensureVersions(path,body,source);
+  payload=versionPayload(path,body,data,source);
+ }
+ const response=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json','X-CSRF-Token':data?.user?.csrf||''}:{},body:body?JSON.stringify(payload):undefined});
+ const result=await response.json();
+ if(response.status===401){location.replace('/login.html');const failure=Error('请重新登录');failure.status=401;throw failure;}
+ if(!response.ok){const failure=Error(result.error||'操作失败');failure.status=response.status;failure.code=result.code;throw failure;}
+ if(data)applyVersionDelta(result._record_versions,data);
+ return result;
+}
 async function send(path,body,source){if(body){workspaceMutationEpoch++;workspaceWrites++;}try{return await sendOnce(path,body,source);}catch(error){if(error.status!==undefined||!body?.request_id)throw error;try{return await sendOnce('/api/idempotency/result?request_id='+encodeURIComponent(body.request_id));}catch(queryError){if(queryError.status===undefined||queryError.code==='REQUEST_PENDING'||queryError.status===404){const pending=Error('结果待确认');throw pending;}throw queryError;}}finally{if(body)workspaceWrites--;}}
 async function loadBoard(detail,allowWorkflowReload=false,workflowVersions=false,guard=null){
  if(!allowWorkflowReload&&window.DeviceWorkflow?.isOpen())return false;
@@ -309,9 +321,161 @@ function renderExchange(){
  $('downloadTemplate').onclick=()=>downloadData({kind:$('exchangeKind').value,format:$('exchangeFormat').value,template:true}).catch(failImport);$('exportAll').onclick=()=>downloadData({kind:$('exchangeKind').value,format:$('exchangeFormat').value}).catch(failImport);
  $('previewImport').onclick=async()=>{const file=$('importFile').files[0];clearImportError();if(!file){failImport(Error('请选择表格文件'));return;}const button=$('previewImport');button.disabled=true;try{if(file.size>8*1024*1024)throw Error('文件不能超过8MB');const content=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=reject;reader.readAsDataURL(file);});importPreview=await send('/api/workspace/import-preview',{...ScopeUI.payload('importOfficeScope',{optional:true}),kind:$('exchangeKind').value,filename:file.name,content});$('importResult').innerHTML=`<p>${esc(importPreview.note)}</p><p class="muted">忽略的列：${esc(importPreview.ignored_columns.join('、')||'无')}</p><div class="preview-scroll">${table(['确认','原表行','处理方式','差异 / 错误'],importPreview.rows.map(row=>`<tr><td><input type="checkbox" data-import-row="${row.row}" ${row.selected?'checked':''} ${['create','update'].includes(row.action)?'':'disabled'}></td><td>${row.row}</td><td>${esc({create:'新增',update:'已有资料（默认保留，勾选才更新）',same:'无变化',error:'错误，不能导入'}[row.action])}</td><td>${esc(row.error||'')}${row.changes.map(change=>`<small>${esc(labels[change.field]||change.field)}：${esc(change.before)} → ${esc(change.after)}</small>`).join('')}</td></tr>`))}</div><button id="applyImport" class="button primary">确认导入已勾选行</button>`;$('applyImport').onclick=async()=>{const selected=[...document.querySelectorAll('[data-import-row]:checked')].map(field=>Number(field.dataset.importRow));$('applyImport').disabled=true;clearImportError();try{const result=await send('/api/workspace/import-apply',{preview_id:importPreview.preview_id,rows:selected,request_id:claimRequestId('import-apply')});settleRequestId('import-apply');$('importResult').textContent='已完成 '+result.imported+' 行导入；重新刷新后查看资料。';}catch(error){settleRequestId('import-apply',error);failImport(error);$('applyImport').disabled=false;}};}catch(error){failImport(error);}finally{button.disabled=false;}};
 }
+const businessCleanupPhrase='永久清理全站业务资料';
+const businessCleanupPreviewPath='/api/workspace/business-cleanup-preview';
+const businessCleanupApplyPath='/api/workspace/business-cleanup-apply';
+const businessCleanupMainCounts={accounts:'抖音账号',phone_cards:'手机卡',phone_devices:'手机设备',employee_card_employees:'员工办卡档案'};
+const businessCleanupCountLabels={...backupTableNames,...businessCleanupMainCounts,
+ nurture_records:'养号记录',nurture_images:'养号截图',account_offices:'账号办公室归属',
+ phone_card_offices:'手机卡办公室归属',phone_device_offices:'设备办公室归属',phone_units:'手机实物',
+ device_cases:'设备处理事项',phone_card_placements:'手机卡插放记录',phone_account_access:'账号登录关联',
+ device_workflow_events:'设备流程记录',employee_card_applications:'办卡申请',employee_card_units:'办卡卡片档案',
+ employee_card_links:'办卡关联',employee_card_verifications:'办卡核对记录',employee_card_events:'办卡历史记录',
+ publish_review_samples:'发布核查样本',publish_review_baselines:'发布核查基线',publish_review_tasks:'发布核查待办',
+ table_sync_account_sources:'账号同步来源',table_sync_batches:'表格同步批次',table_sync_review_items:'表格同步核对项',table_sync_events:'表格同步记录',
+ publishing_slots_cleared:'清空内容的发布格位置'};
+let businessCleanupFlow=null;
+function businessCleanupCounts(value){
+ if(!value||typeof value!=='object'||Array.isArray(value)||!Object.keys(businessCleanupMainCounts).every(key=>Object.hasOwn(value,key)))return null;
+ const entries=Object.entries(value);
+ return entries.every(([,count])=>Number.isSafeInteger(count)&&count>=0)?entries:null;
+}
+function businessCleanupCountTable(entries,heading){
+ const rows=items=>table(['资料类别',heading],items.map(([key,count])=>`<tr><td>${esc(Object.hasOwn(businessCleanupCountLabels,key)?businessCleanupCountLabels[key]:key)}</td><td>${count}</td></tr>`));
+ const main=entries.filter(([key])=>Object.hasOwn(businessCleanupMainCounts,key));
+ const related=entries.filter(([key])=>!Object.hasOwn(businessCleanupMainCounts,key));
+ return rows(main)+(related.length?`<details class="work-explanation"><summary>相关业务记录明细</summary>${rows(related)}</details>`:'');
+}
+function mountBusinessCleanup(host){
+ if(data.user.role!=='owner'||data.user.scope_mode!=='all'){
+  host.hidden=true;
+  return;
+ }
+ const owner=data.user.id;
+ if(businessCleanupFlow?.owner!==owner)businessCleanupFlow={owner,busy:false,receipt:null,pending:null,error:''};
+ const flow=businessCleanupFlow;
+ const permitted=()=>businessCleanupFlow===flow&&data?.user?.role==='owner'&&data.user.scope_mode==='all'&&data.user.id===owner;
+ const current=()=>permitted()&&tab==='backups'&&host.isConnected&&$('businessCleanup')===host;
+ host.innerHTML=`<h3 id="businessCleanupHeading">永久清理全站业务资料</h3>
+ <p><strong>此操作覆盖全部办公室，提交后不可撤销。</strong></p>
+ <p>清理抖音账号、手机卡、手机设备、员工办卡档案及相关业务记录。</p>
+ <p>保留总管理员和员工登录账号、权限、办公室、发布电脑、发布格位置和系统审计。发布格对应的业务资料会清除。</p>
+ <div class="detail-actions"><button type="button" id="businessCleanupPreview" class="button">预览全站清理范围</button><button type="button" id="businessCleanupCheck" class="button" hidden>核对本次清理结果</button></div>
+ <p id="businessCleanupStatus" role="status"></p><p id="businessCleanupError" class="error-text" role="alert"></p>
+ <div id="businessCleanupResult"></div>`;
+ const previewButton=$('businessCleanupPreview'),checkButton=$('businessCleanupCheck');
+ const status=$('businessCleanupStatus'),errorMessage=$('businessCleanupError'),resultPanel=$('businessCleanupResult');
+ function showStatus(){
+  const busy=flow.busy||previewButton.dataset.loading==='yes';
+  previewButton.disabled=busy||!!flow.pending;
+  checkButton.hidden=!flow.pending;
+  checkButton.disabled=busy;
+  if(flow.busy)status.textContent='正在处理，请稍候…';
+  else if(flow.pending)status.textContent='清理结果待核对。请先查询本次结果。';
+  else if(previewButton.dataset.loading==='yes')status.textContent='正在读取清理预览…';
+  else status.textContent=flow.receipt?'清理已完成，可查看下方回执。':'';
+  errorMessage.textContent=flow.error;
+  if(flow.receipt){
+   resultPanel.innerHTML=`<h4>清理完成回执</h4><p>请求编号 ${esc(flow.receipt.requestId)}</p>${businessCleanupCountTable(flow.receipt.counts,'已清理数量')}`;
+  }
+ }
+ function notify(){
+  if(!permitted()||tab!=='backups')return;
+  const liveHost=$('businessCleanup');
+  if(liveHost===host)showStatus();
+  else if(liveHost)mountBusinessCleanup(liveHost);
+ }
+ function complete(result,requestId){
+  const counts=businessCleanupCounts(result.counts);
+  if(!counts)throw Error('服务器未返回完整清理回执。');
+  flow.pending=null;
+  flow.receipt={requestId,counts};
+  try{localStorage.removeItem('douyin-board-view');}catch(error){}
+  if(current())reload().catch(fail);
+ }
+ checkButton.onclick=async()=>{
+  if(!current()||flow.busy||!flow.pending)return;
+  const requestId=flow.pending;
+  flow.busy=true;
+  flow.error='';
+  showStatus();
+  try{
+   complete(await send('/api/idempotency/result?request_id='+encodeURIComponent(requestId)),requestId);
+  }catch(error){
+   if(error.status===404||error.code==='REQUEST_PENDING'||error.status===undefined||error.status>=500){
+    flow.error='暂时无法核对本次结果，请稍后再查。';
+   }else{
+    flow.pending=null;
+    flow.error=error.message;
+   }
+  }finally{
+   flow.busy=false;
+   notify();
+  }
+ };
+ previewButton.onclick=async()=>{
+  if(!current()||flow.busy||flow.pending||previewButton.disabled)return;
+  flow.error='';
+  flow.receipt=null;
+  resultPanel.replaceChildren();
+  previewButton.dataset.loading='yes';
+  showStatus();
+  try{
+   const preview=await send(businessCleanupPreviewPath,{});
+   if(!current())return;
+   const counts=businessCleanupCounts(preview.counts);
+   const expires=typeof preview.expires_at==='number'?(preview.expires_at<1e12?preview.expires_at*1000:preview.expires_at):Date.parse(preview.expires_at);
+   if(typeof preview.preview_id!=='string'||!preview.preview_id||!counts||!Number.isFinite(expires))throw Error('服务器未返回完整清理预览。');
+   if(Date.now()>=expires)throw Error('预览已过期，请重新预览。');
+   resultPanel.innerHTML=`<h4>全站清理预览</h4>${businessCleanupCountTable(counts,'当前数量')}
+    <p>预览有效至 ${esc(new Date(expires).toLocaleString('zh-CN'))}。资料在预览后变化时，须重新预览。</p>
+    <div class="work-filters"><label>输入“${businessCleanupPhrase}”<input id="businessCleanupConfirm" autocomplete="off" spellcheck="false"></label>
+    <button type="button" id="businessCleanupApply" class="button" disabled>确认永久清理</button></div>`;
+   const confirmField=$('businessCleanupConfirm'),applyButton=$('businessCleanupApply');
+   function updateConfirmation(){
+    if(!current()||!confirmField.isConnected||flow.busy)return;
+    const expired=Date.now()>=expires;
+    applyButton.disabled=expired||confirmField.value!==businessCleanupPhrase;
+    if(expired){
+     confirmField.disabled=true;
+     errorMessage.textContent='预览已过期，请重新预览。';
+    }
+   }
+   confirmField.oninput=updateConfirmation;
+   setTimeout(updateConfirmation,Math.min(2147483647,Math.max(0,expires-Date.now())));
+   applyButton.onclick=async()=>{
+    if(!current()||!confirmField.isConnected||flow.busy||flow.pending)return;
+    if(Date.now()>=expires){updateConfirmation();return;}
+    if(confirmField.value!==businessCleanupPhrase)return;
+    const requestId=newRequestId();
+    flow.busy=true;
+    flow.error='';
+    resultPanel.replaceChildren();
+    showStatus();
+    try{
+     const result=await send(businessCleanupApplyPath,{preview_id:preview.preview_id,request_id:requestId,confirmation:businessCleanupPhrase});
+     complete(result,requestId);
+    }catch(error){
+     if(error.status===undefined||error.status>=500||error.code==='REQUEST_PENDING'){
+      flow.pending=requestId;
+      flow.error='没有收到可确认的清理回执，请核对本次结果。';
+     }else{
+      flow.error=error.message+' 请重新预览后再确认。';
+     }
+    }finally{
+     flow.busy=false;
+     notify();
+    }
+   };
+  }catch(error){if(current())flow.error=error.message;}
+  finally{delete previewButton.dataset.loading;if(current())showStatus();}
+ };
+ showStatus();
+}
 async function renderBackups(){
  if(data.user.role!=='owner'){$('workspaceBody').innerHTML='<p>只有总管理员可以管理备份和恢复。</p>';return;}
- $('workspaceBody').innerHTML='<div class="workspace-primary-actions"><button id="manualBackup" class="button primary">立即备份当前数据</button></div><div id="backupRows">正在读取…</div><div id="restorePanel"></div>';
+ $('workspaceBody').innerHTML='<div class="workspace-primary-actions"><button id="manualBackup" class="button primary">立即备份当前数据</button></div><div id="backupRows">正在读取…</div><div id="restorePanel"></div><section id="businessCleanup" class="danger-box" aria-labelledby="businessCleanupHeading"></section>';
+ mountBusinessCleanup($('businessCleanup'));
  const backupRows=$('backupRows');let result;try{result=await send('/api/workspace/backups');}catch(error){if(backupRows===$('backupRows')){backupRows.textContent='无法读取备份，请点击刷新资料重试。';fail(error);}return;}if(backupRows!==$('backupRows'))return;backupRows.innerHTML=table(['备份文件','时间','大小','操作'],result.backups.map(item=>`<tr><td>${esc(item.id)}</td><td>${esc(new Date(item.at*1000).toLocaleString('zh-CN'))}</td><td>${(item.bytes/1024/1024).toFixed(2)}MB</td><td><button class="button" data-restore="${esc(item.id)}">检查并预览恢复</button></td></tr>`));
  $('manualBackup').onclick=async()=>{try{$('manualBackup').disabled=true;const result=await send('/api/workspace/backup-now',{});$('workspaceError').textContent='已备份：'+result.name;await renderBackups();}catch(error){fail(error);if($('manualBackup'))$('manualBackup').disabled=false;}};
  $('backupRows').onclick=async event=>{const button=event.target.closest('[data-restore]');if(!button)return;try{restorePreview=await send('/api/workspace/restore-preview',{backup_id:button.dataset.restore});$('restorePanel').innerHTML=`<div class="danger-box"><h3>恢复预览：${esc(restorePreview.backup_id)}</h3><p>${esc(restorePreview.note)}</p>${table(['业务表','当前条数','备份条数'],Object.entries(restorePreview.counts).map(([name,value])=>`<tr><td>${esc(backupTableNames[name]||name)}</td><td>${value.current}</td><td>${value.backup}</td></tr>`))}<form id="restoreForm"><label>输入“恢复业务数据”<input id="restoreConfirm" required autocomplete="off"></label><label>你的总管理员密码<input id="restorePassword" type="password" required autocomplete="current-password"></label><p>恢复会替换当前业务资料；先自动备份当前库，之后暂停作品采集。预览后资料发生变化时会拒绝执行，需重新预览。</p><button class="button primary" type="submit">确认恢复所选备份</button></form><p id="restoreError" class="error-text"></p></div>`;$('restoreForm').onsubmit=async event=>{event.preventDefault();const button=event.submitter;button.disabled=true;try{const result=await send('/api/workspace/restore-apply',{preview_id:restorePreview.preview_id,confirmation:$('restoreConfirm').value,password:$('restorePassword').value});$('restorePassword').value='';$('restorePanel').textContent=result.note+'；恢复前备份：'+result.backup_before_restore;}catch(error){$('restorePassword').value='';$('restoreError').textContent=error.message;button.disabled=false;}};}catch(error){fail(error);}};

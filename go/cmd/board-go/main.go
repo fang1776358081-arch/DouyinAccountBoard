@@ -25,6 +25,7 @@ import (
 	"douyinboard/internal/backuprestore"
 	"douyinboard/internal/board"
 	"douyinboard/internal/bootstrap"
+	businesscleanup "douyinboard/internal/cleanup"
 	"douyinboard/internal/collection"
 	"douyinboard/internal/daily"
 	"douyinboard/internal/employeecards"
@@ -252,6 +253,9 @@ func mountPostgres(lifecycle context.Context, mux *http.ServeMux, db *sql.DB, or
 	mux.HandleFunc("POST "+backuprestore.ManualPath, backups.Manual())
 	mux.HandleFunc("POST "+backuprestore.PreviewPath, backups.Preview())
 	mux.HandleFunc("POST "+backuprestore.ApplyPath, backups.Apply())
+	cleanupService := businesscleanup.Service{Write: write}
+	mux.HandleFunc("POST "+businesscleanup.PreviewPath, cleanupService.Preview())
+	mux.HandleFunc("POST "+businesscleanup.ApplyPath, cleanupService.Apply())
 	employeeCards := employeecards.Service{Write: write}
 	mux.HandleFunc("GET "+employeecards.Path, employeeCards.Get)
 	mux.HandleFunc("POST "+employeecards.PreviewPath, employeeCards.Preview())
@@ -342,6 +346,9 @@ func backupDirectory(ctx context.Context, db *sql.DB) (string, error) {
 func permitReceipt(ctx context.Context, tx *sql.Tx, actor session.User, action string, result map[string]any) error {
 	if action == publishing.LinkPath || action == publishing.AssignmentPath {
 		return publishing.PermitReceipt(ctx, tx, actor, result)
+	}
+	if action == businesscleanup.ApplyPath {
+		return businesscleanup.AuthorizeOwner(ctx, tx, actor, nil)
 	}
 	if action == collection.EnqueuePath {
 		return collection.PermitReceipt(ctx, tx, actor, result)
