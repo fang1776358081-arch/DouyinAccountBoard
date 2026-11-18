@@ -7,15 +7,16 @@ function compactAccountRow(account,index){
  const phoneTitle=typeof accountDeviceDisplay==='function'?accountDeviceDisplay(account,data):account.phone_device_name||'登录手机待确认';
  const unit=(data.device_workflow?.units||[]).find(row=>String(row.id)===String(account.device_access?.last_unit_id));
  const device=(data.phone_devices?.devices||[]).find(row=>row.id===(unit?.device_id||account.phone_device_id));
- const phone=device&&typeof deviceOfficeText==='function'?deviceOfficeText(device,data)+' · '+(deviceNumber(device)||'未编号')+'号手机'+(unit&&!unit.active?' · 旧机':unit?.generation>1?' · 第'+unit.generation+'台':''):phoneTitle;
+ const phone=device&&typeof deviceOfficeText==='function'?deviceOfficeText(device,data)+' · '+(deviceNumber(device)?deviceNumber(device)+'号手机':'手机编号待核对')+(unit&&!unit.active?' · 旧机':unit?.generation>1?' · 第'+unit.generation+'台':''):phoneTitle;
  const note=esc(String(account.note||'').slice(0,80)||'填写备注');
- return `<tr><td><input type="checkbox" data-select="${esc(account.id)}" ${selected.has(account.id)?'checked':''} aria-label="选择账号 ${esc(account.name)}"></td>
-  <td class="account-identity">${inline('name','<strong>'+esc(account.name||'昵称待补充')+'</strong>')}<button type="button" class="text-button account-detail-link" data-account-pilot-detail="${esc(account.id)}" aria-label="查看账号 ${esc(account.name||'未命名')} 详情，抖音号 ${esc(account.douyin_id||'待补充')}">${account.douyin_id?'抖音号 '+esc(account.douyin_id):'抖音号待补充'}<span aria-hidden="true"> ↗</span></button></td>
-  <td class="account-status">${inline('status',status)}</td>
-  <td class="account-phone"><span title="${esc(phoneTitle)}">${esc(phone||'登录手机待确认')}</span><small>注册卡 ${esc(account.registration_phone||'待确认')}</small>${account.device_access?.login_state==='登录受阻'?'<small class="account-pilot-warning">登录受阻</small>':''}</td>
-  <td class="account-position">${actualPublishingText(account)}</td>
-  <td><button class="publish-toggle" data-publish="${esc(account.id)}" aria-pressed="${!!account.published}">${account.published?'✓ 已发':'○ 未发'}</button></td>
-  <td class="account-notes">${inline('note',note)}</td></tr>`;
+ return `<tr><td data-column="select"><input type="checkbox" data-select="${esc(account.id)}" ${selected.has(account.id)?'checked':''} aria-label="选择账号 ${esc(account.name)}"></td>
+  <td class="account-identity" data-column="name">${inline('name','<strong>'+esc(account.name||'昵称待补充')+'</strong>')}</td>
+  <td class="account-douyin" data-column="douyin"><button type="button" class="text-button account-detail-link" data-account-pilot-detail="${esc(account.id)}" aria-label="查看账号 ${esc(account.name||'未命名')} 详情，抖音号 ${esc(account.douyin_id||'待补充')}">${account.douyin_id?esc(account.douyin_id):'抖音号待补充'}<span aria-hidden="true"> ↗</span></button></td>
+  <td class="account-status" data-column="status">${inline('status',status)}</td>
+  <td class="account-phone" data-column="phone"><span class="account-sheet-relation" title="${esc(phoneTitle)}">${esc(phone||'登录手机待确认')}</span><small>注册卡 ${esc(account.registration_phone||'待确认')}</small>${account.device_access?.login_state==='登录受阻'?'<small class="account-pilot-warning">登录受阻</small>':''}</td>
+  <td class="account-position" data-column="position">${actualPublishingText(account)}</td>
+  <td data-column="published"><button class="publish-toggle" data-publish="${esc(account.id)}" aria-pressed="${!!account.published}">${account.published?'✓ 已发':'○ 未发'}</button></td>
+  <td class="account-notes" data-column="notes">${inline('note',note)}</td></tr>`;
 }
 function accountFilterValue(id){
  const field=$(id);if(!field||!String(field.value||'').trim())return '';
@@ -129,7 +130,7 @@ if(typeof window!=='undefined')window.AccountPilot=(()=>{
   const active=enabled();document.body.classList.toggle('account-pilot',active);
   const head=document.querySelector('.account-table thead tr');
   if(active){
-   if(head){const all=field('selectAll');if(headerHTML===null)headerHTML=head.innerHTML;head.innerHTML='<th></th><th>账号</th><th>账号状态</th><th>登录手机 / 注册卡</th><th>发布位置</th><th>当天发布</th><th>备注</th>';if(all)head.querySelector('th')?.append(all);}
+   if(head){const all=field('selectAll');if(headerHTML===null)headerHTML=head.innerHTML;head.innerHTML='<th data-column="select"></th><th data-column="name">账号昵称</th><th data-column="douyin">完整抖音号</th><th data-column="status">状态</th><th data-column="phone">登录手机 / 注册卡</th><th data-column="position">发布位置</th><th data-column="published">当天发布</th><th data-column="notes">备注</th>';if(all)head.querySelector('th')?.append(all);}
    field('title').textContent='账号资料';field('breadcrumb').textContent='账号资料';field('subtitle').textContent='双击修改昵称、状态和备注，点抖音号查看完整资料。';document.title='账号资料 · 账号工作台';
    const actions=document.querySelector('.header-actions');if(actions)actions.hidden=false;
    const retry=field('accountPilotSourcesRetry');if(retry)retry.hidden=sourcePhase!=='error';

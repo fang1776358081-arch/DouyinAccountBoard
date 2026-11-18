@@ -1,0 +1,206 @@
+/* Local account-sheet sample. The shared navigation and business rules keep
+   their existing owners; all presentation below is opt-in on this page. */
+body.accounts-sheet {
+  --sheet-bg: #f3f5f9;
+  --sheet-surface: #fff;
+  --sheet-ink: #253449;
+  --sheet-muted: #6b788c;
+  --sheet-line: #e1e7ef;
+  --sheet-soft: #f7f9fc;
+  --sheet-accent: #206bc4;
+  --sheet-accent-soft: #edf4fe;
+  --sheet-select-width: 42px;
+  background: var(--sheet-bg);
+  color: var(--sheet-ink);
+  font-size: 14px;
+}
+
+body.accounts-sheet [hidden] { display: none !important; }
+body.accounts-sheet > main { padding: 22px 24px 24px; }
+body.accounts-sheet main > header { gap: 20px; padding: 0; margin-bottom: 10px; border: 0; }
+body.accounts-sheet main > header h1 { margin: 5px 0; font-size: 24px; line-height: 32px; font-weight: 600; letter-spacing: 0; }
+body.accounts-sheet main > header p { color: var(--sheet-muted); font-size: 12px; line-height: 20px; }
+body.accounts-sheet .eyebrow { color: var(--sheet-muted); font-size: 11px; }
+body.accounts-sheet .account-sheet-sample-label { display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border: 1px solid #d6e6fa; border-radius: 4px; background: #edf5ff; color: #4e739e; font-size: 11px; line-height: 18px; vertical-align: middle; }
+body.accounts-sheet .user-bar { gap: 8px 12px; margin: 0 0 5px; }
+body.accounts-sheet .live-sync-bar { gap: 8px; margin: 2px 0 7px; line-height: 20px; }
+body.accounts-sheet #accountsHeaderActions .button.primary { background: var(--sheet-accent); border-color: var(--sheet-accent); box-shadow: 0 1px 2px #203c6b12; }
+body.accounts-sheet #accountsHeaderActions .button.primary:hover { background: #185aa8; }
+body.accounts-sheet .office-workspace { padding: 0; margin-bottom: 8px; border: 0; background: transparent; }
+body.accounts-sheet .office-workspace #officeHint { margin: 3px 0 0; line-height: 18px; }
+body.accounts-sheet .office-tabs { gap: 6px; }
+body.accounts-sheet .office-tab { min-height: 32px; padding: 5px 10px; border-color: transparent; background: transparent; color: var(--sheet-muted); }
+body.accounts-sheet .office-tab.active { color: var(--sheet-accent); border-color: #d6e4f8; background: var(--sheet-surface); box-shadow: 0 1px 2px #22395805; }
+body.accounts-sheet .office-tab strong { font-size: 12px; font-weight: 500; }
+body.accounts-sheet #accountWorkspace { overflow: visible; border: 1px solid var(--sheet-line); border-radius: 8px; box-shadow: 0 2px 5px #22395805; background: var(--sheet-surface); }
+
+/* A quiet view bar keeps global actions separate from row selection actions. */
+body.accounts-sheet .account-sheet-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; padding: 0 16px; min-height: 52px; border-bottom: 1px solid var(--sheet-line); }
+body.accounts-sheet .account-sheet-view { display: inline-flex; align-items: center; gap: 8px; align-self: stretch; min-height: 52px; color: var(--sheet-accent); font-size: 13px; font-weight: 600; border-bottom: 2px solid var(--sheet-accent); padding: 0 2px; margin-bottom: -1px; }
+body.accounts-sheet .account-sheet-view svg { width: 17px; height: 17px; flex-shrink: 0; stroke-width: 1.6; }
+body.accounts-sheet .account-sheet-tools { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 0; padding: 8px 0; }
+body.accounts-sheet .account-sheet-tools :is(.button,.text-button,[data-sheet-density]),
+body.accounts-sheet .account-sheet-tools > button,
+body.accounts-sheet .account-sheet-columns > summary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; box-sizing: border-box; padding: 5px 10px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: #506078; font: inherit; font-size: 12px; line-height: 20px; white-space: nowrap; cursor: pointer; text-decoration: none; }
+body.accounts-sheet .account-sheet-tools :is(.button,.text-button,[data-sheet-density]):hover,
+body.accounts-sheet .account-sheet-tools > button:hover,
+body.accounts-sheet .account-sheet-columns > summary:hover { background: var(--sheet-soft); border-color: var(--sheet-line); color: var(--sheet-ink); }
+body.accounts-sheet .account-sheet-tools :is(button,summary):focus-visible { outline: 2px solid var(--sheet-accent); outline-offset: 2px; }
+body.accounts-sheet .account-sheet-tools button:disabled { cursor: not-allowed; opacity: .45; }
+body.accounts-sheet [data-sheet-density][aria-pressed="true"] { color: var(--sheet-accent); border-color: #d4e3f8; background: var(--sheet-accent-soft); }
+body.accounts-sheet .account-sheet-tools svg { width: 16px; height: 16px; flex-shrink: 0; }
+body.accounts-sheet .account-sheet-columns { position: relative; margin: 0; padding: 0; border: 0; }
+body.accounts-sheet .account-sheet-columns > summary { list-style: none; }
+body.accounts-sheet .account-sheet-columns > summary::-webkit-details-marker { display: none; }
+body.accounts-sheet .account-sheet-columns > summary::after { content: ""; width: 5px; height: 5px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); margin: -3px 1px 0 3px; }
+body.accounts-sheet .account-sheet-columns[open] > summary { color: var(--sheet-accent); background: var(--sheet-accent-soft); }
+body.accounts-sheet .account-sheet-columns[open] > fieldset { position: absolute; right: 0; top: calc(100% + 7px); z-index: 12; display: grid; gap: 2px; width: 248px; max-width: calc(100vw - 40px); max-height: min(60vh,420px); overflow: auto; box-sizing: border-box; margin: 0; padding: 8px; border: 1px solid var(--sheet-line); border-radius: 7px; background: var(--sheet-surface); box-shadow: 0 10px 30px #1d355721,0 2px 5px #1d355708; }
+body.accounts-sheet .account-sheet-columns fieldset legend { padding: 0 6px; color: var(--sheet-muted); font-size: 11px; }
+body.accounts-sheet .account-sheet-columns fieldset label { display: flex; align-items: center; gap: 9px; min-height: 34px; padding: 5px 8px; border-radius: 4px; color: var(--sheet-ink); font-size: 13px; line-height: 20px; cursor: pointer; }
+body.accounts-sheet .account-sheet-columns fieldset label:hover { background: var(--sheet-soft); }
+body.accounts-sheet .account-sheet-columns fieldset label:has(input:disabled) { color: var(--sheet-muted); cursor: default; }
+body.accounts-sheet .account-sheet-columns input[type="checkbox"] { width: 15px; height: 15px; margin: 0; padding: 0; flex: 0 0 15px; accent-color: var(--sheet-accent); }
+
+/* Reuse the actual filter inputs, their values and existing event handlers. */
+body.accounts-sheet #accountWorkspace > .account-filter-toolbar { padding: 12px 16px; border: 0; border-bottom: 1px solid var(--sheet-line); border-radius: 0; background: #fbfcfe; }
+body.accounts-sheet #accountWorkspace .account-common-filters { display: grid; grid-template-columns: repeat(3,minmax(140px,1fr)) auto; align-items: end; gap: 12px; }
+body.accounts-sheet #accountWorkspace .account-more-fields { display: grid; grid-template-columns: repeat(4,minmax(120px,1fr)); gap: 12px; padding-top: 12px; }
+body.accounts-sheet #accountWorkspace :is(.account-common-filters,.account-more-fields) .field-search { display: block; min-width: 0; max-width: none; width: auto; color: var(--sheet-muted); font-size: 11px; line-height: 18px; }
+body.accounts-sheet #accountWorkspace :is(.account-common-filters,.account-more-fields) :is(input:not([type="hidden"]),select) { width: 100%; max-width: none; min-height: 34px; margin-top: 4px; padding: 6px 9px; border: 1px solid #d8e0eb; border-radius: 5px; color: var(--sheet-ink); background: #fff; font-size: 12px; line-height: 20px; }
+body.accounts-sheet #accountWorkspace :is(.account-common-filters,.account-more-fields) :is(input,select):focus { border-color: #78a7e0; box-shadow: 0 0 0 3px #206bc411; outline: 0; }
+body.accounts-sheet #accountWorkspace .account-filter-actions { display: flex; justify-content: flex-end; align-items: center; align-self: end; flex-wrap: wrap; gap: 8px; grid-column: auto; margin: 0; }
+body.accounts-sheet #accountWorkspace .account-more-filters { border-top: 0; padding-top: 0; margin-top: 12px; }
+body.accounts-sheet #accountWorkspace .account-more-filters > summary { color: var(--sheet-accent); font-size: 12px; }
+body.accounts-sheet #accountWorkspace .account-disclosures { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px; padding-top: 0; border: 0; }
+body.accounts-sheet #accountWorkspace .account-disclosures > details { flex: 0 1 auto; min-width: 0; margin: 0; padding: 0; border: 0; }
+body.accounts-sheet #accountWorkspace .account-disclosures > details > summary { min-height: 24px; padding: 2px 0; font-size: 12px; line-height: 20px; }
+body.accounts-sheet #accountWorkspace .account-disclosures > details[open] { flex-basis: 100%; }
+body.accounts-sheet #accountWorkspace .account-supplement > summary { color: var(--sheet-muted); font-size: 12px; }
+body.accounts-sheet #accountActiveFilters { gap: 6px; padding: 9px 16px; margin: 0; background: #fff; border-bottom: 1px solid var(--sheet-line); font-size: 12px; }
+body.accounts-sheet #accountActiveFilters[data-has-filters="false"] { display: none; }
+body.accounts-sheet #accountActiveFilters .account-filter-count { color: var(--sheet-muted); margin-right: 6px; }
+body.accounts-sheet #accountActiveFilters strong { color: var(--sheet-ink); font-weight: 600; }
+body.accounts-sheet #accountActiveFilters .account-filter-chip { padding: 3px 7px; font-size: 11px; line-height: 18px; border-color: #dce7f7; background: var(--sheet-accent-soft); color: #315e94; border-radius: 4px; }
+body.accounts-sheet #accountWorkspace > .panel-heading { display: none; }
+body.accounts-sheet #accountWorkspace > .panel-heading h2 { font-size: 14px; font-weight: 600; line-height: 22px; }
+body.accounts-sheet #scope { margin-top: 2px; color: var(--sheet-muted); font-size: 11px; line-height: 18px; }
+body.accounts-sheet #accountsView > .account-inline-hint { margin: 0; padding: 7px 16px; border: 0; border-top: 1px solid var(--sheet-line); border-radius: 0; color: var(--sheet-muted); background: #fafbfd; font-size: 11px; line-height: 19px; }
+body.accounts-sheet #accountsView > .account-inline-hint:is([data-inline-phase="error"],[data-inline-phase="conflict"],[data-inline-phase="unknown"]) { background: #fff5e5; color: #8a5a12; }
+body.accounts-sheet #accountsView > .account-batch-toolbar { margin: 0; padding: 7px 16px; gap: 8px; border-top: 1px solid var(--sheet-line); background: #fff; }
+body.accounts-sheet #accountsView > .account-batch-toolbar:has([data-batch-open]) { background: var(--sheet-accent-soft); }
+body.accounts-sheet #accountsView > .account-batch-toolbar:not(:has([data-batch-open])) { padding-top: 3px; padding-bottom: 3px; }
+body.accounts-sheet #accountsView .account-batch-content { gap: 6px 8px; }
+body.accounts-sheet #accountsView .account-selection-summary { color: var(--sheet-muted); font-size: 11px; }
+body.accounts-sheet #accountsView .account-batch-toolbar :is(.button,.text-button) { min-height: 28px; padding: 3px 8px; font-size: 11px; line-height: 20px; }
+
+/* Stable field keys, rather than column positions, support field visibility. */
+body.accounts-sheet #accountsView > .account-scroll { max-height: min(70vh,760px); overflow: auto; border-top: 1px solid var(--sheet-line); scrollbar-width: thin; scrollbar-color: #bdc9d8 #f7f9fc; overscroll-behavior: contain; }
+body.accounts-sheet #accountsView > .account-scroll:focus-visible { outline: 2px solid var(--sheet-accent); outline-offset: -2px; }
+body.accounts-sheet #accountsView .account-table { width: max-content; min-width: 100%; table-layout: auto; border-collapse: separate; border-spacing: 0; font-size: 13px; line-height: 20px; }
+body.accounts-sheet #accountsView .account-table :is(th,td) { box-sizing: border-box; width: auto; padding: 10px 12px; border: 0; border-right: 1px solid #edf0f5; border-bottom: 1px solid #e7ebf1; vertical-align: top; }
+body.accounts-sheet #accountsView .account-table th { position: sticky; top: 0; z-index: 3; background: #f4f7fb; color: #65748a; font-size: 12px; font-weight: 500; letter-spacing: .1px; line-height: 20px; white-space: nowrap; }
+body.accounts-sheet #accountsView .account-table :is(th,td)[data-column="select"] { width: var(--sheet-select-width); min-width: var(--sheet-select-width); max-width: var(--sheet-select-width); padding-left: 12px; padding-right: 12px; text-align: center; }
+body.accounts-sheet #accountsView .account-table [data-column="name"] { width: 180px; min-width: 180px; max-width: 220px; }
+body.accounts-sheet #accountsView .account-table [data-column="douyin"] { width: 154px; min-width: 154px; max-width: 200px; font-variant-numeric: tabular-nums; }
+body.accounts-sheet #accountsView .account-table [data-column="status"] { width: 108px; min-width: 108px; max-width: 170px; }
+body.accounts-sheet #accountsView .account-table [data-column="phone"] { width: 180px; min-width: 180px; max-width: 220px; }
+body.accounts-sheet #accountsView .account-table [data-column="position"] { width: 150px; min-width: 150px; max-width: 210px; }
+body.accounts-sheet #accountsView .account-table [data-column="published"] { width: 100px; min-width: 100px; max-width: 110px; }
+body.accounts-sheet #accountsView .account-table [data-column="notes"] { width: 200px; min-width: 180px; max-width: 260px; }
+body.accounts-sheet #accountsView .account-table tbody tr { --sheet-row-bg: #fff; }
+body.accounts-sheet #accountsView .account-table tbody tr:hover { --sheet-row-bg: #f8faff; }
+body.accounts-sheet #accountsView .account-table tbody tr:has(input[data-select]:checked) { --sheet-row-bg: #eef5ff; }
+body.accounts-sheet #accountsView .account-table tbody tr:has(.account-inline-editor) { --sheet-row-bg: #f8faff; }
+body.accounts-sheet #accountsView .account-table td { color: var(--sheet-ink); background: var(--sheet-row-bg); overflow-wrap: anywhere; }
+body.accounts-sheet #accountsView .account-table :is(th,td):is([data-column="select"],[data-column="name"]) { position: sticky; left: 0; z-index: 2; }
+body.accounts-sheet #accountsView .account-table :is(th,td)[data-column="name"] { left: var(--sheet-select-width); box-shadow: 1px 0 0 #dbe2ed; }
+body.accounts-sheet #accountsView .account-table th:is([data-column="select"],[data-column="name"]) { z-index: 5; }
+body.accounts-sheet #accountsView .account-table:has([data-column="select"][hidden]) :is(th,td)[data-column="name"] { left: 0; }
+body.accounts-sheet #accountsView .account-table input[type="checkbox"] { width: 15px; height: 15px; padding: 0; margin: 3px 0 0; vertical-align: top; accent-color: var(--sheet-accent); cursor: pointer; }
+body.accounts-sheet #accountsView .account-table .account-identity { min-width: 0; }
+body.accounts-sheet #accountsView .account-table .account-identity strong { color: #253449; font-size: 13px; font-weight: 500; line-height: 20px; }
+body.accounts-sheet #accountsView .account-table small { margin-top: 3px; color: var(--sheet-muted); font-size: 11px; line-height: 18px; }
+body.accounts-sheet #accountsView .account-table .account-phone,
+body.accounts-sheet #accountsView .account-table .account-position { font-size: 12px; line-height: 20px; }
+body.accounts-sheet #accountsView .account-table .account-sheet-relation { display: inline-block; width: fit-content; max-width: 100%; box-sizing: border-box; padding: 1px 6px; border: 1px solid #dde5f0; border-radius: 4px; background: #f1f5fb; color: #536c8c; font-size: 12px; line-height: 18px; white-space: normal; overflow-wrap: anywhere; }
+body.accounts-sheet #accountsView .account-table .badge { padding: 1px 7px; border-radius: 4px; font-size: 12px; font-weight: 400; line-height: 20px; }
+body.accounts-sheet #accountsView .account-table .badge.good { color: #1c765b; background: #eaf7f0; }
+body.accounts-sheet #accountsView .account-table .badge.warn { color: #936019; background: #fff3db; }
+body.accounts-sheet #accountsView .account-table .publish-toggle { min-height: 28px; padding: 3px 7px; border-radius: 4px; font-size: 11px; line-height: 20px; }
+body.accounts-sheet #accountsView .account-table .account-detail-link { width: fit-content; max-width: 100%; padding: 0; margin-top: 0; color: var(--sheet-accent); font-size: 13px; font-weight: 400; line-height: 20px; text-align: left; }
+body.accounts-sheet #accountsView .account-table .account-inline-cell { display: block; width: 100%; min-width: 0; max-width: none; box-sizing: border-box; padding: 2px 3px; border: 1px solid transparent; border-radius: 3px; }
+body.accounts-sheet #accountsView .account-table .account-inline-cell:not(:has(.account-inline-editor)):hover { border-color: #c6d9f2; background: #f0f6ff; }
+body.accounts-sheet #accountsView .account-table .account-inline-cell:has(.account-inline-editor) { border-color: #75a4e0; background: #fff; box-shadow: 0 0 0 2px #206bc410; }
+body.accounts-sheet #accountsView .account-table .account-inline-cell:focus-visible { outline: 2px solid var(--sheet-accent); outline-offset: 1px; }
+body.accounts-sheet #accountsView .account-table .account-inline-value { display: block; max-height: none; overflow: visible; color: inherit; line-height: 20px; white-space: pre-wrap; }
+body.accounts-sheet #accountsView .account-table .account-notes .account-inline-value { max-height: none; overflow: visible; color: var(--sheet-muted); }
+body.accounts-sheet #accountsView .account-table .account-notes .account-inline-cell:not(:has(.account-inline-editor)) .account-inline-value { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; }
+body.accounts-sheet #accountsView .account-table .account-inline-editor { width: 100%; min-width: 0; max-width: none; font-size: 12px; line-height: 20px; }
+body.accounts-sheet #accountsView .account-table .account-inline-editor :is(input,textarea,select) { min-width: 0; min-height: 30px; border: 1px solid #b8cfed; border-radius: 3px; padding: 5px 6px; color: var(--sheet-ink); font: inherit; }
+body.accounts-sheet #accountsView .account-table .account-inline-editor textarea { min-height: 88px; resize: vertical; }
+body.accounts-sheet #accountsView .account-table .account-inline-editor :is(input,textarea,select):focus { border-color: var(--sheet-accent); outline: 0; box-shadow: none; }
+body.accounts-sheet #accountsView .account-table .account-inline-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+body.accounts-sheet #accountsView .account-table .account-inline-actions button { min-height: 27px; padding: 3px 7px; border-color: #d5dfeb; color: #3a5b83; font-size: 11px; line-height: 18px; }
+body.accounts-sheet #accountsView .account-table .account-inline-status { color: #8a5a12; font-size: 11px; line-height: 18px; }
+body.accounts-sheet #accountsView .account-table .account-inline-open { color: var(--sheet-accent); font-size: 11px; }
+body.accounts-sheet #accountsView .account-table .account-inline-note-preview { margin-bottom: 0; }
+body.accounts-sheet #accountsView .account-table .empty-result { height: 168px; padding: 40px 20px; color: var(--sheet-muted); text-align: center; }
+body.accounts-sheet #accountPagination { gap: 10px; margin: 0; padding: 11px 16px; border-top: 0; color: var(--sheet-muted); background: #fff; font-size: 11px; }
+body.accounts-sheet #accountPagination .button { min-height: 30px; padding: 4px 9px; border-color: #dbe2ec; font-size: 11px; line-height: 20px; }
+body.accounts-sheet #accountsView > .footnote { padding: 9px 16px; margin: 0; border-top: 1px solid var(--sheet-line); border-radius: 0 0 8px 8px; color: #8290a1; font-size: 11px; line-height: 18px; }
+
+/* Density changes cell padding only; editing controls and feedback stay usable. */
+body.accounts-sheet[data-sheet-density="compact"] #accountsView .account-table :is(th,td) { padding-top: 5px; padding-bottom: 5px; }
+body.accounts-sheet[data-sheet-density="compact"] #accountsView .account-table :is(td[data-column="phone"],td[data-column="position"],td[data-column="notes"]) { font-size: 12px; line-height: 18px; }
+body.accounts-sheet[data-sheet-density="comfortable"] #accountsView .account-table :is(th,td) { padding-top: 12px; padding-bottom: 12px; }
+
+/* The existing account detail dialog becomes a quiet side panel. */
+body.accounts-sheet #accountPilotDetailDialog { inset: 0 0 0 auto; width: min(520px,100vw); max-width: 100vw; height: 100dvh; max-height: 100dvh; padding: 0; margin: 0; border: 0; border-left: 1px solid var(--sheet-line); border-radius: 0; box-shadow: -12px 0 36px #172c491a; background: #fff; }
+body.accounts-sheet #accountPilotDetailDialog[open] { display: flex; flex-direction: column; }
+body.accounts-sheet #accountPilotDetailDialog::backdrop { background: #15243b3d; }
+body.accounts-sheet #accountPilotDetailDialog > .dialog-head { position: sticky; top: 0; z-index: 2; padding: 20px 24px 16px; margin: 0; border-bottom: 1px solid var(--sheet-line); background: #fff; align-items: flex-start; }
+body.accounts-sheet #accountPilotDetailDialog .dialog-head small { color: var(--sheet-muted); font-size: 11px; }
+body.accounts-sheet #accountPilotDetailDialog .dialog-head h2 { margin: 4px 0 0; font-size: 18px; font-weight: 600; line-height: 28px; overflow-wrap: anywhere; }
+body.accounts-sheet #accountPilotDetailDialog .dialog-head .text-button { min-height: 30px; padding: 4px 8px; color: var(--sheet-muted); font-size: 12px; }
+body.accounts-sheet #accountPilotDetailDialog .account-pilot-detail-body { min-height: 0; padding: 0 24px; }
+body.accounts-sheet #accountPilotDetailDialog .account-pilot-detail-body section { padding: 16px 0; border-bottom: 1px solid var(--sheet-line); }
+body.accounts-sheet #accountPilotDetailDialog .account-pilot-detail-body h3 { margin: 0 0 10px; color: var(--sheet-ink); font-size: 13px; font-weight: 600; }
+body.accounts-sheet #accountPilotDetailDialog .account-pilot-detail-body p { color: #55667c; font-size: 12px; line-height: 21px; }
+body.accounts-sheet #accountPilotDetailDialog .account-pilot-detail-body .permission-note { color: var(--sheet-muted); font-size: 11px; }
+body.accounts-sheet #accountPilotDetailDialog .account-pilot-detail-footer { position: sticky; bottom: 0; padding: 14px 24px; margin: 0; gap: 7px; border-top: 1px solid var(--sheet-line); background: #fff; }
+body.accounts-sheet #accountPilotDetailDialog .account-pilot-detail-footer .button { min-height: 32px; padding: 5px 9px; font-size: 12px; line-height: 20px; }
+
+@media (max-width: 1200px) {
+  body.accounts-sheet > main { padding: 20px; }
+  body.accounts-sheet #accountWorkspace .account-common-filters { grid-template-columns: repeat(3,minmax(120px,1fr)) auto; }
+  body.accounts-sheet #accountWorkspace .account-more-fields { grid-template-columns: repeat(3,minmax(120px,1fr)); }
+  body.accounts-sheet .account-sheet-toolbar { gap: 0 12px; }
+}
+@media (max-width: 900px) {
+  body.accounts-sheet .account-sheet-toolbar { padding: 0 12px; }
+  body.accounts-sheet .account-sheet-tools { justify-content: flex-start; }
+  body.accounts-sheet #accountWorkspace .account-common-filters,
+  body.accounts-sheet #accountWorkspace .account-more-fields { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  body.accounts-sheet #accountsView > .account-scroll { max-height: 65vh; }
+}
+@media (max-width: 650px) {
+  body.accounts-sheet > main { padding: 16px 12px; }
+  body.accounts-sheet main > header { gap: 12px; }
+  body.accounts-sheet main > header h1 { font-size: 21px; line-height: 29px; }
+  body.accounts-sheet .account-sheet-toolbar { align-items: flex-start; }
+  body.accounts-sheet .account-sheet-view { min-height: 44px; }
+  body.accounts-sheet .account-sheet-tools { flex-basis: 100%; padding-top: 0; }
+  body.accounts-sheet .account-sheet-columns[open] > fieldset { left: 0; right: auto; }
+  body.accounts-sheet #accountWorkspace > .account-filter-toolbar { padding: 12px; }
+  body.accounts-sheet #accountActiveFilters,
+  body.accounts-sheet #accountWorkspace > .panel-heading,
+  body.accounts-sheet #accountsView > .account-inline-hint,
+  body.accounts-sheet #accountsView > .account-batch-toolbar,
+  body.accounts-sheet #accountPagination { padding-left: 12px; padding-right: 12px; }
+  body.accounts-sheet #accountPilotDetailDialog > .dialog-head { padding: 18px 16px 14px; }
+  body.accounts-sheet #accountPilotDetailDialog .account-pilot-detail-body { padding: 0 16px; }
+  body.accounts-sheet #accountPilotDetailDialog .account-pilot-detail-footer { padding: 12px 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.accounts-sheet :is(button,input,select,textarea,summary) { transition: none; }
+}
