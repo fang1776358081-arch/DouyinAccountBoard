@@ -1,0 +1,3 @@
+go/internal/webassets/static/*.js text eol=lf
+go/internal/webassets/static/*.css text eol=lf
+go/internal/webassets/static/*.html text eol=lf
