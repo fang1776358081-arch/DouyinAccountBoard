@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import stat
 import tempfile
-import threading
+import importlib.util
 import unittest
 from unittest.mock import Mock, patch
 
@@ -16,9 +16,9 @@ TOKEN='synthetic-only-worker-token-0000000000000000'
 ENV={'DOUYIN_BOARD_COLLECTION_ENABLED':'1',
      'DOUYIN_BOARD_WORKER_ORIGIN':'http://127.0.0.1:18790',
      'DOUYIN_BOARD_WORKER_TOKEN':TOKEN}
-JOB={'account_id':'synthetic-account','token':'synthetic-job-lease',
-     'douyin_id':'0012345678','homepage':''}
 PROFILE_URL='https://www.douyin.com/user/MS4wSyntheticOnly'
+JOB={'account_id':'synthetic-account','token':'synthetic-job-lease',
+     'douyin_id':'0012345678','homepage':PROFILE_URL}
 
 
 class GoWorkerTest(unittest.TestCase):
@@ -103,30 +103,30 @@ class GoWorkerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder)/'project';safe=Path(folder)/'private-profile';safe.mkdir()
             for static in (root/'static',root/'go/internal/webassets/static'):
-                for field in ('profile','output'):
+                for field in ('profile','output','index'):
                     candidate=static/'private-material'
                     runtime={**ENV,'DOUYIN_BOARD_F2_PYTHON':__file__,'DOUYIN_BOARD_F2_SCRIPT':__file__,
                              'DOUYIN_BOARD_F2_PROFILE':str(candidate if field=='profile' else safe),
-                             'DOUYIN_BOARD_F2_OUTPUT':str(candidate if field=='output' else Path(folder)/'private-output')}
+                             'DOUYIN_BOARD_F2_OUTPUT':str(candidate if field=='output' else Path(folder)/'private-output'),
+                             'DOUYIN_BOARD_F2_PROFILE_INDEX':str(candidate) if field=='index' else ''}
                     with self.subTest(static=str(static),field=field),patch.object(f2_worker,'ROOT',root),patch.dict(os.environ,runtime,clear=True):
                         worker=f2_worker.Worker()
                         with self.assertRaisesRegex(ValueError,'网页资源'):worker.configure_runtime()
                     self.assertFalse(candidate.exists())
 
-    def test_visible_query_is_explicitly_opt_in_and_never_overrides_headless(self):
+    def test_runtime_uses_pinned_original_and_ignores_legacy_script_or_visible_query(self):
         with tempfile.TemporaryDirectory() as folder:
             runtime={**ENV,'DOUYIN_BOARD_F2_PYTHON':__file__,'DOUYIN_BOARD_F2_SCRIPT':__file__,
                      'DOUYIN_BOARD_F2_PROFILE':folder,'DOUYIN_BOARD_F2_OUTPUT':str(Path(folder)/'output'),
                      'DISPLAY':':synthetic-only','DOUYIN_BOARD_F2_HEADLESS':'0'}
             with patch.dict(os.environ,runtime,clear=True):
-                worker=f2_worker.Worker();worker.configure_runtime();self.assertFalse(worker.visible_query)
-            for visible,headless,expected in (('0','0',False),('1','0',True),('1','1',False)):
+                worker=f2_worker.Worker();worker.configure_runtime();self.assertEqual(worker.script,f2_worker.original_script())
+            for visible,headless in (('0','0'),('1','0'),('1','1'),('obsolete','0')):
                 with self.subTest(visible=visible,headless=headless),patch.dict(os.environ,{**runtime,
                         'DOUYIN_BOARD_F2_VISIBLE_QUERY':visible,'DOUYIN_BOARD_F2_HEADLESS':headless},clear=True):
-                    worker=f2_worker.Worker();worker.configure_runtime();self.assertEqual(worker.visible_query,expected)
-            with patch.dict(os.environ,{**runtime,'DOUYIN_BOARD_F2_VISIBLE_QUERY':'yes'},clear=True):
-                worker=f2_worker.Worker()
-                with self.assertRaisesRegex(ValueError,'VISIBLE_QUERY'):worker.configure_runtime()
+                    worker=f2_worker.Worker();worker.configure_runtime()
+                    self.assertEqual(worker.script,f2_worker.original_script());self.assertNotEqual(worker.script,Path(__file__))
+                    self.assertFalse(hasattr(worker,'visible_query'))
 
     def test_default_background_query_keeps_manual_window_capability(self):
         worker=self.worker();worker.headless=False
@@ -141,7 +141,7 @@ class GoWorkerTest(unittest.TestCase):
             worker.output=Path(folder);worker.query(JOB)
         args=worker.launch.call_args.args[0]
         self.assertNotIn('--headed',args);self.assertNotIn('--interactive',args)
-        self.assertFalse(worker.launch.call_args.kwargs['observe_verification'])
+        self.assertEqual(worker.launch.call_args.args[1],f2_worker.subprocess.DEVNULL)
         self.assertTrue(worker.browser_control)
 
     def test_no_redirects_or_environment_proxy_for_worker_requests(self):
@@ -163,6 +163,7 @@ class GoWorkerTest(unittest.TestCase):
         worker=self.worker();worker.python=Path('synthetic-python');worker.script=Path('synthetic-collector')
         worker.profile=Path('synthetic-profile');worker.browser=Path('synthetic-browser')
         env={**ENV,'DOUYIN_BOARD_WORKER_TOKEN_FILE':'private-token-file',
+             'DOUYIN_BOARD_F2_PROFILE_INDEX':'synthetic-private-index-file',
              'BOARD_GO_PG_DSN':'synthetic-private-dsn','BOARD_GO_COLLECTION_TOKEN':'synthetic-server-token',
              'DATABASE_URL':'synthetic-database-url','PGPASSWORD':'synthetic-password',
              'PGPASSFILE':'synthetic-passfile','PATH':'synthetic-safe-path'}
@@ -172,6 +173,7 @@ class GoWorkerTest(unittest.TestCase):
         self.assertEqual(inherited,{'PATH':'synthetic-safe-path'})
         self.assertIn('--browser-executable',launch.call_args.args[0])
         self.assertNotIn(TOKEN,launch.call_args.args[0])
+        self.assertEqual(launch.call_args.args[0][3],str(f2_worker.original_script()))
         self.assertEqual(launch.call_args.kwargs['stdout'],f2_worker.subprocess.DEVNULL)
 
     def test_exact_handle_and_bound_homepage_are_required_zero_is_valid(self):
@@ -284,22 +286,26 @@ class GoWorkerTest(unittest.TestCase):
             self.assertTrue(worker.deliver(JOB,self.delivery_body(),once=True))
         opened.assert_not_called();worker.request.assert_called_once()
 
-    def test_verification_marker_is_observed_without_emitting_upstream_output(self):
-        waiting=threading.Event()
-        raw='other output\n搜索接口要求安全验证（verify_check）。窗口已保留；请本人验证\n'.encode('utf-8')
-        with patch('builtins.print') as output:
-            f2_worker.Worker.observe_verification(io.BytesIO(raw),waiting)
-        output.assert_not_called();self.assertTrue(waiting.is_set())
+    def test_missing_or_conflicting_profile_does_not_start_upstream_or_pause_queue(self):
+        for profiles,code in (({},'ProfileMissing'),({JOB['douyin_id']:{PROFILE_URL,PROFILE_URL+'Other'}},'ProfileConflict')):
+            worker=self.worker();worker.profiles=f2_worker.ProfileIndex(profiles);worker.failures=3
+            worker.launch=Mock();worker.deliver=Mock(return_value=False)
+            job={**JOB,'homepage':''}
+            self.assertFalse(worker.collect(job,once=True));worker.launch.assert_not_called()
+            self.assertEqual(worker.failures,3);worker.deliver.assert_called_once()
+            body=worker.deliver.call_args.args[1]
+            self.assertEqual(body['error'],f2_worker.ERRORS[code]);self.assertTrue(body['profile_required']);self.assertFalse(body['blocked'])
+            self.assertNotIn('count',body);self.assertNotIn('source_url',body)
+            self.assertEqual(worker.query(job),{'status':'failed','error':code})
+            worker.launch.assert_not_called()
 
-    def test_only_explicit_resume_can_continue_the_same_verification_process(self):
-        worker=self.worker();waiting=threading.Event();waiting.set()
-        process=Mock();process.poll.return_value=None;process.stdin=io.BytesIO()
-        worker.command='open';worker.resume_query(process,waiting)
-        self.assertTrue(waiting.is_set());self.assertEqual(process.stdin.getvalue(),b'')
-        worker.command='resume';worker.resume_query(process,waiting)
-        self.assertFalse(waiting.is_set());self.assertEqual(process.stdin.getvalue(),b'\n')
-        worker.command='resume';worker.resume_query(process,waiting)
-        self.assertEqual(process.stdin.getvalue(),b'\n')
+    def test_resolved_profile_is_bound_to_identity_and_cannot_be_replaced_by_report(self):
+        worker=self.worker();worker.profiles=f2_worker.ProfileIndex({JOB['douyin_id']:{PROFILE_URL}})
+        worker.query=Mock(return_value={'status':'success','account':JOB['douyin_id'],'count':0,'url':PROFILE_URL+'Other'})
+        worker.deliver=Mock(return_value=False)
+        self.assertFalse(worker.collect({**JOB,'homepage':''},once=True))
+        self.assertEqual(worker.query.call_args.args[0]['homepage'],PROFILE_URL)
+        body=worker.deliver.call_args.args[1];self.assertIn('error',body);self.assertNotIn('count',body)
 
     def test_idle_worker_does_not_open_any_browser_automatically(self):
         worker=self.worker();worker.browser_control=True;worker.launch=Mock()
@@ -328,42 +334,24 @@ class GoWorkerTest(unittest.TestCase):
         self.assertIsNone(worker.poll());worker.request.assert_called_once_with('/api/collection/next')
         restarted=self.worker(wait_for_resume=True);self.assertTrue(restarted.waiting_for_resume)
 
-    def query_process(self):
-        process=Mock();process.poll.return_value=None
-        process.stdout=io.BytesIO('搜索接口要求安全验证（verify_check）。窗口已保留；请本人验证\n'.encode('utf-8'))
-        process.stdin=io.BytesIO()
-        return process
-
-    def immediate_reader(self):
-        class Reader:
-            def __init__(self,target,args,daemon):self.target=target;self.args=args;self.joined=False
-            def start(self):self.target(*self.args)
-            def join(self,timeout):self.joined=True
-        return Reader
-
-    def test_interactive_search_wait_expires_before_lease_and_closes_pipes(self):
-        worker=self.worker();worker.browser_control=True;worker.headless=False;worker.visible_query=True
-        process=self.query_process()
+    def test_original_query_timeout_never_opens_an_interactive_retry(self):
+        worker=self.worker();worker.browser_control=True;worker.headless=False
+        process=Mock();process.poll.return_value=None;process.stdout=io.BytesIO(b'synthetic-hidden-output');process.stdin=None
         worker.launch=Mock(return_value=process)
         worker.stop=Mock(side_effect=lambda child:setattr(child.poll,'return_value',1))
         with tempfile.TemporaryDirectory() as folder:
             worker.output=Path(folder)
-            with patch.object(f2_worker.threading,'Thread',self.immediate_reader()),patch.object(f2_worker.time,'monotonic',side_effect=[0,481]):
+            with patch.object(f2_worker.time,'monotonic',side_effect=[0,181]):
                 result=worker.query(JOB)
-        self.assertEqual(result,{'status':'failed','error':'SearchNeedsVerification'})
-        self.assertIn('--interactive',worker.launch.call_args.args[0])
-        self.assertTrue(worker.launch.call_args.kwargs['observe_verification'])
+        self.assertEqual(result,{'status':'failed','error':'CollectorTimedOut'})
+        self.assertNotIn('--interactive',worker.launch.call_args.args[0]);self.assertNotIn('--headed',worker.launch.call_args.args[0])
+        worker.launch.assert_called_once()
         worker.stop.assert_called_once_with(process)
-        self.assertTrue(process.stdin.closed);self.assertTrue(process.stdout.closed)
+        self.assertTrue(process.stdout.closed)
 
-    def test_interactive_search_only_resumes_same_process_then_reads_one_report(self):
-        worker=self.worker();worker.browser_control=True;worker.headless=False;worker.visible_query=True
-        process=self.query_process();resumed=[]
-        class Input(io.BytesIO):
-            def write(self,data):
-                resumed.append(data);process.poll.return_value=0
-                return super().write(data)
-        process.stdin=Input()
+    def test_original_query_receives_only_bound_url_and_exact_expected_handle(self):
+        worker=self.worker();worker.browser_control=True;worker.headless=False
+        process=Mock();process.poll.return_value=0;process.stdin=None;process.stdout=None
         good={'status':'success','account':JOB['douyin_id'],'count':0,'url':PROFILE_URL}
         with tempfile.TemporaryDirectory() as folder:
             worker.output=Path(folder)
@@ -373,15 +361,29 @@ class GoWorkerTest(unittest.TestCase):
                 (report/'results.json').write_text(json.dumps({'results':[good]}),encoding='utf-8')
                 return process
             worker.launch=Mock(side_effect=launch)
-            def heartbeat(status):
-                self.assertEqual(status,'等待手动登录或验证');worker.command='resume'
-            worker.heartbeat=Mock(side_effect=heartbeat)
-            with patch.object(f2_worker.threading,'Thread',self.immediate_reader()),patch.object(f2_worker.time,'monotonic',side_effect=[0,1]),patch.object(f2_worker.time,'sleep'):
-                self.assertEqual(worker.query(JOB),good)
+            self.assertEqual(worker.query(JOB),good)
             source=next(worker.output.glob('job-*/accounts.json'))
-            self.assertEqual(json.loads(source.read_text()),[JOB['douyin_id']])
-        worker.launch.assert_called_once();self.assertEqual(resumed,[b'\n'])
-        self.assertTrue(process.stdin.closed);self.assertTrue(process.stdout.closed)
+            self.assertEqual(json.loads(source.read_text()),[{'url':PROFILE_URL,'account':JOB['douyin_id']}])
+            self.assertNotIn(JOB['token'],source.read_text())
+        worker.launch.assert_called_once();self.assertEqual(worker.launch.call_args.args[1],f2_worker.subprocess.DEVNULL)
+        self.assertNotIn('--interactive',worker.launch.call_args.args[0]);self.assertNotIn('--headed',worker.launch.call_args.args[0])
+
+    def test_original_source_hash_and_parser_identity_zero_count_are_unchanged(self):
+        script=f2_worker.original_script()
+        spec=importlib.util.spec_from_file_location('original_core_fixture',script);core=importlib.util.module_from_spec(spec);spec.loader.exec_module(core)
+        item={'sec_uid':'MS4wSyntheticOnly','expected_account':JOB['douyin_id']}
+        data={'user':{'sec_uid':item['sec_uid'],'unique_id':JOB['douyin_id'],'aweme_count':0}}
+        self.assertEqual(core.parse_user(data,item)['count'],0)
+        for changed in ({'sec_uid':'MS4wOther'},{'unique_id':'12345678'}):
+            with self.assertRaises(core.IdentityMismatch):core.parse_user({'user':{**data['user'],**changed}},item)
+        for count in (None,True,-1):
+            with self.assertRaises(core.ProfileUnavailable):core.parse_user({'user':{**data['user'],'aweme_count':count}},item)
+
+    def test_modified_original_core_is_never_executed(self):
+        worker=self.worker();worker.python=Path('synthetic-python');worker.profile=Path('synthetic-profile')
+        with patch.object(Path,'read_bytes',return_value=b'not-the-original'),patch.object(f2_worker.subprocess,'Popen') as opened:
+            with self.assertRaisesRegex(ValueError,'^内置原始采集程序校验失败，请核对安装文件$'):worker.launch(['login'])
+        opened.assert_not_called()
 
 
 if __name__=='__main__':unittest.main()

@@ -110,14 +110,15 @@ func collectionOverview(ctx context.Context, tx *sql.Tx, scope *scopeMap, accoun
 	if err != nil {
 		return nil, err
 	}
-	var linked, done, failed int64
+	var linked, done, failed, needsProfile int64
 	if accounts == nil {
 		if err := tx.QueryRowContext(ctx, `SELECT count(*) FILTER (WHERE homepage<>'' OR douyin_id<>''),
 			count(*) FILTER (WHERE collection_state='采集成功'),
-			count(*) FILTER (WHERE collection_state IN ('采集失败','需要验证'))
+			count(*) FILTER (WHERE collection_state IN ('采集失败','需要验证')),
+			count(*) FILTER (WHERE collection_state='待补主页')
 			FROM board_candidate.accounts a WHERE $1 OR EXISTS(SELECT 1 FROM board_candidate.account_offices o
 			WHERE o.account_id=a.id AND o.office_id=ANY($2::text[]))`, scope.actor.Global(), scope.actor.OfficeIDs).
-			Scan(&linked, &done, &failed); err != nil {
+			Scan(&linked, &done, &failed, &needsProfile); err != nil {
 			return nil, err
 		}
 	} else {
@@ -130,10 +131,13 @@ func collectionOverview(ctx context.Context, tx *sql.Tx, scope *scopeMap, accoun
 				done++
 			case "采集失败", "需要验证":
 				failed++
+			case "待补主页":
+				needsProfile++
 			}
 		}
 	}
 	result["enabled"], result["worker_online"], result["manual_only"], result["browser_control"] = jobPrefix != "", false, true, false
+	result["profile_only"] = jobPrefix != ""
 	result["auto_enabled"] = false
 	result["worker_status"] = "采集暂未启用；已有数量、时间、错误和任务记录保留"
 	if jobPrefix != "" {
@@ -154,6 +158,7 @@ func collectionOverview(ctx context.Context, tx *sql.Tx, scope *scopeMap, accoun
 		}
 	}
 	result["waiting"], result["linked"], result["done"], result["failed"] = waiting, linked, done, failed
+	result["needs_profile"] = needsProfile
 	return result, nil
 }
 

@@ -26,6 +26,8 @@
 .collection-panel-metrics { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; margin-top: 14px; }
 #collectionBar .collection-panel-metrics { margin-top: 0; gap: 20px; }
 .collection-metric { display: inline-flex; align-items: baseline; gap: 7px; color: #66778d; font-size: 12px; line-height: 24px; }
+.collection-panel a.collection-metric { color: #96600d; text-decoration: none; }
+.collection-panel a.collection-metric:hover { text-decoration: underline; }
 .collection-panel .collection-metric strong { color: #253449; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 28px; }
 .collection-panel-footer { display: flex; justify-content: space-between; gap: 8px 20px; flex-wrap: wrap; margin-top: 8px; }
 .collection-panel .collection-panel-footer p,

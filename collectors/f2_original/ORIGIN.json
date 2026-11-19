@@ -1,0 +1,9 @@
+{
+  "source": "user-provided original douyin-f2-counts.zip",
+  "archive_sha256": "0057c66dfc8276759685aa69d00a7bead4fde4f1303922296d55b26734ef8264",
+  "script": "douyin_counts.py",
+  "script_sha256": "1c4434f4a70377e0924e86b2473980c88f2d38d5588ddfe05c96ba3311f1beee",
+  "requirements_sha256": "22fbd9df2d2f8863e7df203dc0ae5841f18bc4de14a977058c6a176a358f6595",
+  "f2_commit": "f6be8c0ffba9a127075bbeafe4838716650b6325",
+  "runtime_data_included": false
+}

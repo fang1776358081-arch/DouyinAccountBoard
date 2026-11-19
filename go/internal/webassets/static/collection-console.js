@@ -66,6 +66,8 @@
     for(const [key,id] of [['done','collectionDone'],['waiting','collectionWaiting'],['failed','collectionFailed']]){
       $(id).textContent=number(c?.[key])??'—';
     }
+    $('collectionNeedsProfile').textContent=number(c?.needs_profile)??'—';
+    $('collectionNeedsProfileGroup').hidden=!c?.profile_only&&!(number(c?.needs_profile)>0);
     const waiting=number(c?.waiting)||0;
     $('collectionScope').textContent=waiting?`现有共享队列：授权范围内 ${waiting} 个待处理，开始只继续队列`:
       targets?`全部授权账号 ${targets.length} 个`:
@@ -117,14 +119,15 @@
       const inactive=!job.current&&['queued','running'].includes(job.job_state);
       const state=inactive?'旧任务（未运行）':job.state||'历史记录';
       const tone=state==='采集成功'?'good':['采集失败','需要验证'].includes(state)?'warn':'';
-      const canRetry=inactive||['采集失败','需要验证','已取消'].includes(job.state);
+      const needsProfile=job.state==='待补主页';
+      const canRetry=!needsProfile&&(inactive||['采集失败','需要验证','已取消'].includes(job.state));
       const link='/?page=accounts&account_id='+encodeURIComponent(job.account_id);
       const id=job.douyin_id?'抖音号 '+job.douyin_id:'抖音号待补';
       const office=job.office_name||'办公室待核对';
       return `<tr><td><a href="${esc(link)}">${esc(job.name||'昵称待补充')}</a><small>${esc(id)} · ${esc(office)}</small></td>`+
         `<td><span class="badge ${tone}">${esc(state)}</span>${job.error?`<small>${esc(job.error)}</small>`:''}</td>`+
         `<td>${esc(job.count??'—')}</td><td>${esc(time(job.last_collected))}</td>`+
-        `<td>${canRetry?`<button class="text-button" data-retry="${esc(job.account_id)}" ${canSubmit()&&!writing?'':'disabled'}>重新采集</button>`:'—'}</td></tr>`;
+        `<td>${needsProfile?`<a class="text-button" href="${esc(link)}">补充主页</a>`:canRetry?`<button class="text-button" data-retry="${esc(job.account_id)}" ${canSubmit()&&!writing?'':'disabled'}>重新采集</button>`:'—'}</td></tr>`;
     }).join(''):`<tr><td colspan="5" class="collection-empty">${$('collectionState').value?'没有符合筛选的任务':'暂无采集任务'}</td></tr>`;
     $('collectionSheet').hidden=false;
   }
@@ -252,6 +255,8 @@
 
   $('collectionStart').onclick=()=>void begin();
   $('collectionPause').onclick=()=>{if(!$('collectionPause').disabled)void act('pause');};
+  const initialState=new URLSearchParams(location.search||'').get('state');
+  if(['pending','采集成功','采集失败','需要验证','待补主页','已取消'].includes(initialState))$('collectionState').value=initialState;
   $('collectionState').onchange=()=>{page=1;void refresh();};
   $('collectionPrevious').onclick=()=>{page--;void refresh();};
   $('collectionNext').onclick=()=>{page++;void refresh();};

@@ -48,6 +48,56 @@ func TestCollectionWorkerBoundaryAndHomepage(t *testing.T) {
 	}
 }
 
+func TestProfileRequiredProtocol(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		body    payload
+		message string
+		want    bool
+	}{
+		{"missing", payload{"profile_required": true, "blocked": false}, missingProfileError, true},
+		{"conflict", payload{"profile_required": true, "blocked": false}, conflictProfileError, true},
+		{"missing flag", payload{"blocked": false}, missingProfileError, false},
+		{"false flag", payload{"profile_required": false, "blocked": false}, missingProfileError, false},
+		{"string flag", payload{"profile_required": "true", "blocked": false}, missingProfileError, false},
+		{"missing blocked", payload{"profile_required": true}, missingProfileError, false},
+		{"blocked", payload{"profile_required": true, "blocked": true}, missingProfileError, false},
+		{"string blocked", payload{"profile_required": true, "blocked": "false"}, missingProfileError, false},
+		{"unknown error", payload{"profile_required": true, "blocked": false}, "missing:其他错误", false},
+		{"tagged missing error", payload{"profile_required": true, "blocked": false}, "missing:" + missingProfileError, false},
+		{"tagged conflict error", payload{"profile_required": true, "blocked": false}, "conflict:" + conflictProfileError, false},
+		{"decorated error", payload{"profile_required": true, "blocked": false}, missingProfileError + " ", false},
+		{"empty error", payload{"profile_required": true, "blocked": false}, "", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isProfileRequired(tt.body, tt.message); got != tt.want {
+				t.Fatalf("profile protocol classification = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// These wire examples are the exact result_body outputs for ProfileMissing/ProfileConflict.
+// Keep them independent of the Go messages so a producer/consumer wording drift fails the tests.
+func workerProfileResult(t *testing.T, code string, job payload) payload {
+	t.Helper()
+	var raw string
+	switch code {
+	case "ProfileMissing":
+		raw = `{"error":"缺少已确认主页，请补充主页后再采集","profile_required":true,"blocked":false}`
+	case "ProfileConflict":
+		raw = `{"error":"历史主页记录有冲突，请核对主页后再采集","profile_required":true,"blocked":false}`
+	default:
+		t.Fatal("unknown worker profile wire example")
+	}
+	var body payload
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatal(err)
+	}
+	body["account_id"], body["token"] = job["account_id"], job["token"]
+	return body
+}
+
 func TestManualCollectionSyntheticPostgreSQL(t *testing.T) {
 	setting := os.Getenv("BOARD_GO_COLLECTION_TEST_PORT")
 	if setting == "" {
@@ -95,7 +145,9 @@ func TestManualCollectionSyntheticPostgreSQL(t *testing.T) {
 	mux := http.NewServeMux()
 	service.Register(mux)
 	boardRead := board.Handler{DB: db, CollectionJobPrefix: service.ActiveJobPrefix()}
+	mux.HandleFunc("GET /api/board", boardRead.Board)
 	mux.HandleFunc("GET /api/collection/status", boardRead.CollectionStatus)
+	mux.HandleFunc("GET /api/collection/disabled-status", (board.Handler{DB: db}).CollectionStatus)
 	mux.HandleFunc("GET /api/idempotency/result", write.RequestStatus(func(ctx context.Context, tx *sql.Tx, actor session.User, _ string, result map[string]any) error {
 		return PermitReceipt(ctx, tx, actor, result)
 	}))
@@ -230,5 +282,91 @@ func TestManualCollectionSyntheticPostgreSQL(t *testing.T) {
 	result["token"] = claimed["token"]
 	if reply := call("POST", "/api/collection/result", "worker", result, 200); reply["ignored"] != true {
 		t.Fatal("stale identity was accepted")
+	}
+
+	// Missing/conflicting confirmed profiles are per-account follow-up work, not a queue-wide challenge.
+	beforeEmployee := call("GET", "/api/collection/status", "employee", nil, 200)["collection"].(payload)
+	beforeOwner := call("GET", "/api/collection/status", "owner", nil, 200)["collection"].(payload)
+	exec(`UPDATE accounts SET homepage='',douyin_id='0043' WHERE id='go-east-account';
+		UPDATE accounts SET homepage='',douyin_id='0050' WHERE id='go-west-account'`)
+	if reply := call("POST", EnqueuePath, "owner", request(100, "go-east-account", "go-west-account"), 200); reply["queued"] != float64(2) {
+		t.Fatal("profile follow-up fixture did not queue both accounts")
+	}
+	job = call("GET", "/api/collection/next", "worker", nil, 200)["job"].(payload)
+	if job["account_id"] != "go-east-account" {
+		t.Fatal("profile follow-up fixture claimed the wrong first account")
+	}
+	profileResult := workerProfileResult(t, "ProfileMissing", job)
+	profileResult["sampled_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	call("POST", "/api/collection/result", "worker", profileResult, 200)
+	if reply := call("POST", "/api/collection/result", "worker", profileResult, 200); reply["duplicate"] != true {
+		t.Fatal("profile result replay was not detected")
+	}
+	var message string
+	var paused int
+	var preservedLast string
+	if err := db.QueryRowContext(ctx, `SELECT work_count,collection_state,collection_error,last_collected,status,
+		(SELECT paused FROM collection_settings WHERE id=1) FROM accounts WHERE id='go-east-account'`).
+		Scan(&count, &state, &message, &preservedLast, &accountStatus, &paused); err != nil {
+		t.Fatal(err)
+	}
+	if count != 27 || state != "待补主页" || message != missingProfileError || preservedLast != last || accountStatus != "正常" || paused != 0 {
+		t.Fatal("missing profile changed the saved count, successful time, business status or queue pause")
+	}
+	if reply := call("GET", "/api/collection/jobs?state=待补主页", "employee", nil, 200); reply["total"] != float64(1) || reply["jobs"].([]any)[0].(payload)["account_id"] != "go-east-account" {
+		t.Fatal("profile follow-up filter lost the account or office isolation")
+	}
+	job = call("GET", "/api/collection/next", "worker", nil, 200)["job"].(payload)
+	if job["account_id"] != "go-west-account" {
+		t.Fatal("a missing profile prevented the next account from running")
+	}
+	call("POST", "/api/collection/result", "worker", workerProfileResult(t, "ProfileConflict", job), 200)
+	if err := db.QueryRowContext(ctx, `SELECT work_count,collection_state,collection_error,last_collected,
+		(SELECT paused FROM collection_settings WHERE id=1) FROM accounts WHERE id='go-west-account'`).
+		Scan(&count, &state, &message, &preservedLast, &paused); err != nil {
+		t.Fatal(err)
+	}
+	if count != 18 || state != "待补主页" || message != conflictProfileError || preservedLast != "2026-11-09T09:00:00+08:00" || paused != 0 {
+		t.Fatal("conflicting profile changed the previous success or paused the queue")
+	}
+	employeeCollection := call("GET", "/api/collection/status", "employee", nil, 200)["collection"].(payload)
+	ownerCollection := call("GET", "/api/collection/status", "owner", nil, 200)["collection"].(payload)
+	if employeeCollection["needs_profile"].(float64) != beforeEmployee["needs_profile"].(float64)+1 ||
+		ownerCollection["needs_profile"].(float64) != beforeOwner["needs_profile"].(float64)+2 ||
+		employeeCollection["failed"] != beforeEmployee["failed"] || ownerCollection["failed"] != beforeOwner["failed"] ||
+		employeeCollection["profile_only"] != true {
+		t.Fatal("profile counts changed failure semantics, office scope or collector capabilities")
+	}
+	for _, role := range []string{"employee", "owner"} {
+		status := employeeCollection
+		if role == "owner" {
+			status = ownerCollection
+		}
+		boardCollection := call("GET", "/api/board?compact=accounts&version_scope=day", role, nil, 200)["collection"].(payload)
+		if boardCollection["needs_profile"] != status["needs_profile"] || boardCollection["failed"] != status["failed"] || boardCollection["profile_only"] != true {
+			t.Fatal("board and lightweight collection status disagree")
+		}
+	}
+	if disabled := call("GET", "/api/collection/disabled-status", "employee", nil, 200)["collection"].(payload); disabled["profile_only"] != false || disabled["enabled"] != false {
+		t.Fatal("disabled collection advertised an active profile-only engine")
+	}
+	if reply := call("GET", "/api/collection/jobs?state=待补主页", "employee", nil, 200); reply["total"] != float64(1) {
+		t.Fatal("profile filter exposed another office's follow-up account")
+	}
+	// A retry may legitimately return zero. Unknown protocol errors must stay ordinary failures.
+	call("POST", EnqueuePath, "employee", request(101, "go-east-account"), 200)
+	job = call("GET", "/api/collection/next", "worker", nil, 200)["job"].(payload)
+	call("POST", "/api/collection/result", "worker", payload{"account_id": job["account_id"], "token": job["token"],
+		"count": 0, "source_url": "https://www.douyin.com/user/MS4wSyntheticFixture", "matched_douyin_id": "0043"}, 200)
+	call("POST", EnqueuePath, "employee", request(102, "go-east-account"), 200)
+	job = call("GET", "/api/collection/next", "worker", nil, 200)["job"].(payload)
+	call("POST", "/api/collection/result", "worker", payload{"account_id": job["account_id"], "token": job["token"],
+		"error": "missing:其他错误", "profile_required": true, "blocked": false}, 200)
+	if err := db.QueryRowContext(ctx, `SELECT work_count,collection_state,collection_error,
+		(SELECT paused FROM collection_settings WHERE id=1) FROM accounts WHERE id='go-east-account'`).Scan(&count, &state, &message, &paused); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || state != "采集失败" || message != safeMessage("missing:其他错误") || paused != 0 {
+		t.Fatal("zero result or unknown profile protocol was misclassified")
 	}
 }

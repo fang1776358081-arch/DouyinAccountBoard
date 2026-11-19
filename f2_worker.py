@@ -1,5 +1,6 @@
 """Local F2 queue consumer. The worker token stays out of the scraper process."""
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -8,7 +9,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,8 +16,11 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
+from collection_profiles import ProfileIndex,ProfileRequired,canonical_profile
+
 ROOT=Path(__file__).resolve().parent
 WINDOWS=os.name=='nt'
+ORIGINAL_SCRIPT_SHA256='1c4434f4a70377e0924e86b2473980c88f2d38d5588ddfe05c96ba3311f1beee'
 
 # This opt-in belongs to the Go worker only; the legacy service stays disabled.
 def require_collection():
@@ -65,13 +68,23 @@ def collection_tool(name):
     return Path(value).expanduser().resolve()
 
 def bound_homepage(job):
-    homepage=job['homepage']
-    return homepage if homepage and re.fullmatch(r'https://www\.douyin\.com/user/MS4w[A-Za-z0-9_-]+',homepage) else ''
+    return canonical_profile(job.get('homepage'))
 
-ERRORS={'SearchNeedsVerification':'抖音搜索需要安全验证，请在采集浏览器中手动完成',
-        'LoginRequired':'抖音登录已失效，请在独立采集浏览器中重新登录',
+def original_script():
+    path=ROOT/'collectors/f2_original/douyin_counts.py'
+    try:
+        info=path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size!=10632 or hashlib.sha256(path.read_bytes()).hexdigest()!=ORIGINAL_SCRIPT_SHA256:raise ValueError()
+    except (OSError,ValueError):
+        raise ValueError('内置原始采集程序校验失败，请核对安装文件') from None
+    return path
+
+ERRORS={'LoginRequired':'抖音登录已失效，请在独立采集浏览器中重新登录',
+        'SearchNeedsVerification':'抖音搜索需要安全验证，请在采集浏览器中手动完成',
         'SearchUnavailable':'没有搜索到抖音号完全一致的账号，请核对真实抖音号',
         'IdentityMismatch':'账号身份校验失败，未更新数量',
+        'ProfileMissing':'缺少已确认主页，请补充主页后再采集',
+        'ProfileConflict':'历史主页记录有冲突，请核对主页后再采集',
         'ProfileUnavailable':'公开作品数量不可用或账号私密',
         'CollectorStartupFailed':'采集程序未返回有效报告，请检查运行环境和浏览器',
         'CollectorTimedOut':'抖音采集超时，请检查采集器网络'}
@@ -95,6 +108,8 @@ def result_body(job,row):
     error=row.get('error')
     if not isinstance(error,str):error='RuntimeError'
     message=ERRORS.get(error,'采集未完成，请检查服务器采集器和网络')
+    if error in ('ProfileMissing','ProfileConflict'):
+        return {**body,'error':message,'profile_required':True,'blocked':False}
     return {**body,'error':message,
             'blocked':error in BLOCKED_ERRORS}
 
@@ -113,17 +128,20 @@ class Worker:
         self.command='';self.login=None;self.failures=0
         self.browser_control=False
         self.browser=None
-        self.visible_query=False
+        self.profiles=ProfileIndex()
         self.waiting_for_resume=wait_for_resume
 
     def configure_runtime(self):
         self.python = collection_tool('DOUYIN_BOARD_F2_PYTHON')
-        self.script = collection_tool('DOUYIN_BOARD_F2_SCRIPT')
         self.profile = collection_tool('DOUYIN_BOARD_F2_PROFILE')
         self.output = collection_tool('DOUYIN_BOARD_F2_OUTPUT')
+        index_file=os.environ.get('DOUYIN_BOARD_F2_PROFILE_INDEX','')
         static_roots=((ROOT/'static').resolve(),(ROOT/'go/internal/webassets/static').resolve())
-        if any(path.is_relative_to(static) for path in (self.profile,self.output) for static in static_roots):
-            raise ValueError('独立采集浏览器和输出目录不能放在网页资源目录内')
+        private_paths=[self.profile,self.output]
+        if index_file:private_paths.append(Path(index_file).expanduser().resolve())
+        if any(path.is_relative_to(static) for path in private_paths for static in static_roots):
+            raise ValueError('采集浏览器、输出和私有主页索引不能放在网页资源目录内')
+        self.script=original_script()
         if not self.python.is_file() or not self.script.is_file():
             raise ValueError('采集程序或 Python 运行环境不存在')
         if not self.profile.is_dir():
@@ -139,10 +157,7 @@ class Worker:
         if headless == '0' and not graphical:
             raise ValueError('当前系统没有图形会话，请使用无界面采集模式')
         self.headless = headless == '1'
-        visible_query=os.environ.get('DOUYIN_BOARD_F2_VISIBLE_QUERY','0')
-        if visible_query not in ('0','1'):
-            raise ValueError('DOUYIN_BOARD_F2_VISIBLE_QUERY 必须为 0 或 1')
-        self.visible_query=visible_query=='1' and not self.headless
+        self.profiles=ProfileIndex.from_file(index_file)
         self.output.mkdir(parents=True, exist_ok=True)
 
     def request(self,route,body=None):
@@ -156,36 +171,15 @@ class Worker:
         }).get('command')
         if command:self.command=command
 
-    def launch(self,args,stdin=None,*,observe_verification=False):
+    def launch(self,args,stdin=None):
         child_env={key:value for key,value in os.environ.items()
                    if not key.startswith(('DOUYIN_BOARD_','BOARD_GO_')) and key not in ('DATABASE_URL','PGPASSWORD','PGPASSFILE')}
-        command=[str(self.python),'-X','utf8',str(self.script),*args,'--profile',str(self.profile)]
+        command=[str(self.python),'-X','utf8',str(original_script()),*args,'--profile',str(self.profile)]
         if self.browser:command.extend(['--browser-executable',str(self.browser)])
         return subprocess.Popen(command,
-            stdin=stdin,stdout=subprocess.PIPE if observe_verification else subprocess.DEVNULL,
+            stdin=stdin,stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,env=child_env,start_new_session=os.name!='nt',
             creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
-
-    @staticmethod
-    def observe_verification(stream,waiting):
-        # Consume upstream output without forwarding or saving any of it.
-        # Only this fixed, non-sensitive prompt changes the worker's status.
-        marker='搜索接口要求安全验证（verify_check）。窗口已保留；'.encode('utf-8')
-        try:
-            for line in iter(stream.readline,b''):
-                if marker in line:waiting.set()
-        except (OSError,ValueError):
-            pass
-
-    def resume_query(self,process,waiting):
-        if self.command=='resume':
-            self.command=''
-            self.failures=0
-            if waiting.is_set() and process.poll() is None and process.stdin:
-                process.stdin.write(b'\n');process.stdin.flush();waiting.clear()
-        elif self.command=='open':
-            # The current dedicated search/verification window is already open.
-            self.command=''
 
     def stop(self, process):
         if os.name=='nt':
@@ -202,46 +196,26 @@ class Worker:
         process.wait()
 
     def query(self,job):
+        try:homepage=self.profiles.resolve(job['douyin_id'],job.get('homepage'))
+        except ProfileRequired as error:return {'status':'failed','error':error.code}
         folder=Path(tempfile.mkdtemp(prefix='job-',dir=self.output))
         source=folder/'accounts.json'
-        homepage=bound_homepage(job)
         handle=job['douyin_id']
-        if homepage:
-            item={'url':homepage,'account':handle} if handle else {'url':homepage}
-        elif handle:
-            item=handle
-        else:
-            return {'status':'failed','error':'ProfileUnavailable'}
+        item={'url':homepage,'account':handle} if handle else {'url':homepage}
         source.write_text(json.dumps([item]),encoding='utf-8')
         args=['query','--input',str(source),'--output',str(folder),'--max-failures','1']
-        if self.visible_query and not self.headless:args.append('--headed')
-        interactive=self.visible_query and not self.headless and self.browser_control
-        if interactive:args.append('--interactive')
-        process=self.launch(args,subprocess.PIPE if interactive else None,observe_verification=interactive)
-        waiting=threading.Event()
-        reader=None
-        if interactive:
-            reader=threading.Thread(target=self.observe_verification,args=(process.stdout,waiting),daemon=True)
-            reader.start()
+        process=self.launch(args,subprocess.DEVNULL)
         started=time.monotonic()
-        verified_wait=False
         try:
             while process.poll() is None:
-                verified_wait=verified_wait or waiting.is_set()
-                # Keep the same search window available to its owner for at most
-                # eight minutes total, below the server's ten-minute job lease.
-                timeout=480 if verified_wait else 180
-                if time.monotonic()-started>timeout:
+                if time.monotonic()-started>180:
                     self.stop(process)
-                    return {'status':'failed','error':'SearchNeedsVerification' if verified_wait else 'CollectorTimedOut'}
-                try:
-                    self.heartbeat('等待手动登录或验证' if waiting.is_set() else '正在采集')
-                    if interactive:self.resume_query(process,waiting)
+                    return {'status':'failed','error':'CollectorTimedOut'}
+                try:self.heartbeat('正在采集')
                 except Exception:pass
                 time.sleep(2)
         finally:
             if process.poll() is None:self.stop(process)
-            if reader:reader.join(timeout=2)
             for stream in (process.stdin,process.stdout):
                 if stream:stream.close()
         reports=list(folder.glob('*/results.json'))
@@ -253,13 +227,17 @@ class Worker:
         return {'status':'failed','error':'CollectorStartupFailed'}
 
     def collect(self,job,*,once=False):
-        try:row=self.query(job)
-        except OSError:row={'status':'failed','error':'CollectorStartupFailed'}
-        body=result_body(job,row)
+        active=job
+        try:
+            active={**job,'homepage':self.profiles.resolve(job['douyin_id'],job.get('homepage'))}
+            row=self.query(active)
+        except ProfileRequired as error:row={'status':'failed','error':error.code}
+        except (OSError,ValueError):row={'status':'failed','error':'CollectorStartupFailed'}
+        body=result_body(active,row)
         # Capture once, before delivery retries. Server receipt time may be late.
         body['sampled_at']=datetime.now(timezone.utc).isoformat(timespec='microseconds')
-        self.failures=self.failures+1 if body.get('error') else 0
-        if self.failures>=3:
+        if not body.get('profile_required'):self.failures=self.failures+1 if body.get('error') else 0
+        if not body.get('profile_required') and self.failures>=3:
             body.update(blocked=True,error=body['error']+'；连续3次失败，队列暂停，请检查后继续')
         return self.deliver(job,body,once=once)
 

@@ -135,7 +135,7 @@ func (s Service) jobs(w http.ResponseWriter, r *http.Request) {
 	}
 	state := r.URL.Query().Get("state")
 	switch state {
-	case "", "pending", "采集成功", "采集失败", "需要验证", "已取消":
+	case "", "pending", "采集成功", "采集失败", "需要验证", "待补主页", "已取消":
 	default:
 		failure(w, accountwrite.Invalid("采集状态筛选不正确"))
 		return

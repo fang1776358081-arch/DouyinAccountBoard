@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	headlessSuffix = "（无界面）"
-	leaseDuration  = 10 * time.Minute
+	headlessSuffix       = "（无界面）"
+	leaseDuration        = 10 * time.Minute
+	missingProfileError  = "缺少已确认主页，请补充主页后再采集"
+	conflictProfileError = "历史主页记录有冲突，请核对主页后再采集"
 )
 
 var workerActor = session.User{Role: "owner", Name: "本机作品采集器"}
@@ -147,11 +149,15 @@ func complete(ctx context.Context, tx *sql.Tx, body payload, now time.Time) (pay
 	if failed {
 		blocked, _ := body["blocked"].(bool)
 		state := "采集失败"
-		message = safeMessage(message)
-		if blocked {
-			state = "需要验证"
-			if _, err := tx.ExecContext(ctx, `UPDATE board_candidate.collection_settings SET paused=1,auto_enabled=0,pause_reason=$1 WHERE id=1`, message); err != nil {
-				return nil, err
+		if isProfileRequired(body, message) {
+			state = "待补主页"
+		} else {
+			message = safeMessage(message)
+			if blocked {
+				state = "需要验证"
+				if _, err := tx.ExecContext(ctx, `UPDATE board_candidate.collection_settings SET paused=1,auto_enabled=0,pause_reason=$1 WHERE id=1`, message); err != nil {
+					return nil, err
+				}
 			}
 		}
 		if err := updateState(ctx, tx, id, state, message, ""); err != nil {
@@ -190,6 +196,13 @@ func complete(ctx context.Context, tx *sql.Tx, body payload, now time.Time) (pay
 		return nil, err
 	}
 	return payload{"ok": true}, nil
+}
+
+func isProfileRequired(body payload, message string) bool {
+	required, validRequired := body["profile_required"].(bool)
+	blocked, validBlocked := body["blocked"].(bool)
+	return validRequired && required && validBlocked && !blocked &&
+		(message == missingProfileError || message == conflictProfileError)
 }
 
 func safeMessage(message string) string {
