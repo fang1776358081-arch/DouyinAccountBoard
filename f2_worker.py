@@ -113,6 +113,7 @@ class Worker:
         self.command='';self.login=None;self.failures=0
         self.browser_control=False
         self.browser=None
+        self.visible_query=False
         self.waiting_for_resume=wait_for_resume
 
     def configure_runtime(self):
@@ -138,6 +139,10 @@ class Worker:
         if headless == '0' and not graphical:
             raise ValueError('当前系统没有图形会话，请使用无界面采集模式')
         self.headless = headless == '1'
+        visible_query=os.environ.get('DOUYIN_BOARD_F2_VISIBLE_QUERY','0')
+        if visible_query not in ('0','1'):
+            raise ValueError('DOUYIN_BOARD_F2_VISIBLE_QUERY 必须为 0 或 1')
+        self.visible_query=visible_query=='1' and not self.headless
         self.output.mkdir(parents=True, exist_ok=True)
 
     def request(self,route,body=None):
@@ -209,8 +214,8 @@ class Worker:
             return {'status':'failed','error':'ProfileUnavailable'}
         source.write_text(json.dumps([item]),encoding='utf-8')
         args=['query','--input',str(source),'--output',str(folder),'--max-failures','1']
-        if not self.headless:args.append('--headed')
-        interactive=self.browser_control
+        if self.visible_query and not self.headless:args.append('--headed')
+        interactive=self.visible_query and not self.headless and self.browser_control
         if interactive:args.append('--interactive')
         process=self.launch(args,subprocess.PIPE if interactive else None,observe_verification=interactive)
         waiting=threading.Event()
@@ -231,7 +236,7 @@ class Worker:
                     return {'status':'failed','error':'SearchNeedsVerification' if verified_wait else 'CollectorTimedOut'}
                 try:
                     self.heartbeat('等待手动登录或验证' if waiting.is_set() else '正在采集')
-                    self.resume_query(process,waiting)
+                    if interactive:self.resume_query(process,waiting)
                 except Exception:pass
                 time.sleep(2)
         finally:

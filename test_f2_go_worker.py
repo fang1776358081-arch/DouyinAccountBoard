@@ -113,6 +113,37 @@ class GoWorkerTest(unittest.TestCase):
                         with self.assertRaisesRegex(ValueError,'网页资源'):worker.configure_runtime()
                     self.assertFalse(candidate.exists())
 
+    def test_visible_query_is_explicitly_opt_in_and_never_overrides_headless(self):
+        with tempfile.TemporaryDirectory() as folder:
+            runtime={**ENV,'DOUYIN_BOARD_F2_PYTHON':__file__,'DOUYIN_BOARD_F2_SCRIPT':__file__,
+                     'DOUYIN_BOARD_F2_PROFILE':folder,'DOUYIN_BOARD_F2_OUTPUT':str(Path(folder)/'output'),
+                     'DISPLAY':':synthetic-only','DOUYIN_BOARD_F2_HEADLESS':'0'}
+            with patch.dict(os.environ,runtime,clear=True):
+                worker=f2_worker.Worker();worker.configure_runtime();self.assertFalse(worker.visible_query)
+            for visible,headless,expected in (('0','0',False),('1','0',True),('1','1',False)):
+                with self.subTest(visible=visible,headless=headless),patch.dict(os.environ,{**runtime,
+                        'DOUYIN_BOARD_F2_VISIBLE_QUERY':visible,'DOUYIN_BOARD_F2_HEADLESS':headless},clear=True):
+                    worker=f2_worker.Worker();worker.configure_runtime();self.assertEqual(worker.visible_query,expected)
+            with patch.dict(os.environ,{**runtime,'DOUYIN_BOARD_F2_VISIBLE_QUERY':'yes'},clear=True):
+                worker=f2_worker.Worker()
+                with self.assertRaisesRegex(ValueError,'VISIBLE_QUERY'):worker.configure_runtime()
+
+    def test_default_background_query_keeps_manual_window_capability(self):
+        worker=self.worker();worker.headless=False
+        def stop_poll(**unused):
+            self.assertTrue(worker.browser_control)
+            raise KeyboardInterrupt()
+        worker.poll=Mock(side_effect=stop_poll)
+        with self.assertRaises(KeyboardInterrupt):worker.run()
+        process=Mock();process.poll.return_value=0;process.stdin=None;process.stdout=None
+        worker.launch=Mock(return_value=process)
+        with tempfile.TemporaryDirectory() as folder:
+            worker.output=Path(folder);worker.query(JOB)
+        args=worker.launch.call_args.args[0]
+        self.assertNotIn('--headed',args);self.assertNotIn('--interactive',args)
+        self.assertFalse(worker.launch.call_args.kwargs['observe_verification'])
+        self.assertTrue(worker.browser_control)
+
     def test_no_redirects_or_environment_proxy_for_worker_requests(self):
         with patch.object(f2_worker,'build_opener') as build:
             self.worker()
@@ -224,7 +255,7 @@ class GoWorkerTest(unittest.TestCase):
         return Reader
 
     def test_interactive_search_wait_expires_before_lease_and_closes_pipes(self):
-        worker=self.worker();worker.browser_control=True;worker.headless=False
+        worker=self.worker();worker.browser_control=True;worker.headless=False;worker.visible_query=True
         process=self.query_process()
         worker.launch=Mock(return_value=process)
         worker.stop=Mock(side_effect=lambda child:setattr(child.poll,'return_value',1))
@@ -239,7 +270,7 @@ class GoWorkerTest(unittest.TestCase):
         self.assertTrue(process.stdin.closed);self.assertTrue(process.stdout.closed)
 
     def test_interactive_search_only_resumes_same_process_then_reads_one_report(self):
-        worker=self.worker();worker.browser_control=True;worker.headless=False
+        worker=self.worker();worker.browser_control=True;worker.headless=False;worker.visible_query=True
         process=self.query_process();resumed=[]
         class Input(io.BytesIO):
             def write(self,data):
