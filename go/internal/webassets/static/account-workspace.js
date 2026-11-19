@@ -182,11 +182,13 @@ function activateAccountConsole(active){
  move('newAccount','accountsHeaderActions',board?'boardSecondaryActions':'accountCreateHome');
  move('refresh','accountListActions','accountToolsHome');
  move('exportVisibleAccounts','accountListActions',board?'boardSecondaryActions':'accountToolsHome');
- move('collectionBar','accountSupplementBody',board?'boardSupplementBody':'accountSupplementHome');
+ // Collection controls stay above the table; only auxiliary lifecycle data folds.
+ const collectionHome=$('accountSupplementHome'),collection=$('collectionBar');
+ if(collectionHome&&collection&&collection.parentElement!==collectionHome)collectionHome.prepend(collection);
  move('lifecycleSummary','accountSupplementBody',board?'boardSupplementBody':'accountSupplementHome');
  const supplement=$('boardSupplement');if(supplement)supplement.hidden=!board;
  const computerLabel=$('computerFilterLabel');if(computerLabel){computerLabel.textContent=board?'发布电脑':'登记电脑';$('computer').setAttribute('aria-label',computerLabel.textContent);}
  for(const id of ['accountsHeaderActions','accountListActions','accountSupplement']){const node=$(id);if(node)node.hidden=!active;}
- if(active){const summary=$('accountSupplement')?.querySelector('summary');if(summary)summary.innerHTML='作品采集与注册进度<span>'+esc(data?.collection?.enabled===false?'采集暂未启用 · 历史记录保留':'采集入口与历史记录')+'</span>';}
+ if(active){const summary=$('accountSupplement')?.querySelector('summary');if(summary)summary.innerHTML='注册进度<span>低频资料，按需查看</span>';}
  $('newAccount')?.classList.toggle('primary',active);
 }

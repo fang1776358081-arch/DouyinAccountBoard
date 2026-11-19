@@ -6,6 +6,7 @@
   <title>作品采集 · 账号工作台</title>
   <link rel="stylesheet" href="/styles.css?v=20261026">
   <link rel="stylesheet" href="/console-theme.css?v=20261111-workbench">
+  <link rel="stylesheet" href="/collection-panel.css?v=20261120-simple1">
   <link rel="stylesheet" href="/collection-console.css?v=20261111-workbench">
 </head>
 <body class="console-page collection-console">
@@ -16,22 +17,30 @@
   <main>
     <header>
       <div><div class="eyebrow">日常工作 / 作品采集</div><h1>作品采集</h1></div>
-      <div class="collection-toolbar"><button class="button" id="collectionRefresh">刷新</button><button class="button" id="collectionOpenBrowser" data-collection-command="open_browser" hidden disabled>打开采集窗口</button><a class="button primary" href="/?page=accounts" id="collectionAccountLink" hidden>选择账号采集</a></div>
     </header>
+    <section class="collection-panel" aria-label="作品采集控制">
+      <div class="collection-panel-header">
+        <div class="collection-panel-heading"><h2>作品采集</h2><p id="collectionScope">正在确认采集范围…</p><p id="collectionStatus" class="collection-panel-status" data-tone="muted" role="status">正在读取采集状态…</p></div>
+        <div class="collection-panel-actions"><button class="button primary" id="collectionStart" disabled>开始采集</button><button class="button" id="collectionPause" disabled>暂停采集</button></div>
+      </div>
+      <div class="collection-panel-metrics" aria-label="授权范围最近结果">
+        <div class="collection-metric"><strong id="collectionDone">—</strong><span>已采集</span></div>
+        <div class="collection-metric"><strong id="collectionWaiting">—</strong><span>待处理</span></div>
+        <div class="collection-metric"><strong id="collectionFailed">—</strong><span>失败 / 待验证</span></div>
+      </div>
+      <p class="collection-panel-footer">授权范围最近结果 · 待处理包含采集中；暂停后当前账号采完再停</p>
+    </section>
     <p id="collectionNotice" role="status">正在读取采集队列…</p>
     <p id="collectionError" role="alert" hidden></p>
+    <details class="collection-controls collection-help" id="collectionControls" hidden>
+      <summary>采集帮助</summary>
+      <p>需要缩小采集范围时，到账号页选择账号。登录失效或需要验证时，请主动打开采集窗口，完成后再次点击“开始采集”。</p>
+      <div class="collection-toolbar"><a class="button" href="/?page=accounts" id="collectionAccountLink" hidden>到账号页选择范围</a><button class="button" id="collectionOpenBrowser" data-collection-command="open_browser" hidden disabled>打开采集窗口</button><button class="button" data-collection-command="cancel_waiting" hidden disabled>取消等待任务</button></div>
+    </details>
     <section class="workspace collection-sheet" id="collectionSheet" aria-label="采集队列" hidden>
       <div class="collection-toolbar">
         <label>采集状态<select id="collectionState"><option value="">全部</option><option value="pending">待采集</option><option>采集成功</option><option>采集失败</option><option>需要验证</option><option>已取消</option></select></label>
         <span id="collectionTotal"></span>
-        <details class="collection-controls" id="collectionControls" hidden>
-          <summary>队列设置</summary>
-          <div class="collection-toolbar">
-            <button class="button" data-collection-command="resume">继续队列</button>
-            <button class="button" data-collection-command="pause">暂停队列</button>
-            <button class="button" data-collection-command="cancel_waiting">取消等待任务</button>
-          </div>
-        </details>
       </div>
       <div class="collection-table-scroll" tabindex="0" role="region" aria-label="采集记录列表">
         <table class="collection-table">

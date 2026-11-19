@@ -3,9 +3,10 @@
 .collection-console .collection-sheet > .collection-toolbar { padding: 10px 12px; align-items: center; }
 .collection-console .collection-toolbar label { display: flex; align-items: center; gap: 7px; }
 .collection-console .collection-toolbar select { padding: 5px 8px; }
-.collection-console .collection-controls { margin-left: auto; }
+.collection-console .collection-controls { margin: 0 0 14px; }
 .collection-console .collection-controls summary { cursor: pointer; padding: 6px 0; }
-.collection-console .collection-controls[open] { flex: 1 0 100%; }
+.collection-console .collection-help { padding: 8px 12px; border: 1px solid var(--line, #e1e8eb); border-radius: 8px; }
+.collection-console .collection-help p { color: var(--muted, #566b7a); margin: 6px 0 12px; }
 .collection-console .collection-table-scroll { overflow-x: auto; }
 .collection-console .collection-table { min-width: 610px; width: 100%; border-collapse: collapse; }
 .collection-console .collection-table th, .collection-console .collection-table td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line, #e1e8eb); }

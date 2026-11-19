@@ -284,7 +284,7 @@ function renderPageContent(index){if(typeof activateAccountConsole==='function')
  document.querySelector('#boardView .footnote').textContent=layoutActive?'发布位置来自工作进度表。待关联格确认账号后即可记录发布。':'点击未发或已发切换当天记录。';$('boardView').hidden=page!=='board';$('accountsView').hidden=page!=='accounts';$('title').textContent=page==='board'?'每日发布看板':'账号资料';$('breadcrumb').textContent=page==='board'?'每日发布':'账号资料';$('panelTitle').textContent=page==='board'?'主机发布矩阵':'账号清单';$('subtitle').textContent=page==='board'?'按电脑和发布格记录当天进度。':'维护账号资料与发布安排，支持直接编辑和自动保存。';if(typeof renderBatchControls==='function')renderBatchControls();applyPermissions();syncDailyButtons();
 }
 function edit(id){if(window.AccountInline?.hasDraft()){window.AccountInline.announceBlocked();return;}const a=data.accounts.find(a=>a.id===id)||{id:'',name:'',computer_id:'unassigned',slot:1,status:'待确认',douyin_id:'',homepage:'',note:''};lifecycleEdit(a);readinessEdit(a);phoneDeviceEdit(a);$('editId').value=a.id;$('editPlacement').open=!a.id;$('editOfficeGroup').value=a.office_group||(a.id?'':activeOffice==='three'?'three':'');$('editTitle').textContent=a.id?`编辑账号 · ${a.name}`:'新增账号 / 小号';$('editName').value=a.name;$('editComputer').innerHTML=data.computers.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');$('editComputer').value=a.computer_id;$('editSlot').value=a.slot||1;$('editStatus').innerHTML=data.statuses.map(s=>`<option>${esc(s)}</option>`).join('');$('editStatus').value=a.status;$('editDouyin').value=a.douyin_id;$('editHomepage').value=a.homepage;$('editNote').value=a.note;$('editError').textContent='';ScopeUI.mount('editForm',data,'accounts',a);$('editor').showModal();captureVersions('editor');applyAccountPermissions(a);accountEditBaseline=a.id?accountEditValues():{};}
-document.addEventListener('click',async e=>{const collect=e.target.closest('[data-collect]');if(collect)await queue([collect.dataset.collect],collect);const nav=e.target.closest('[data-page]');if(nav&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&!e.altKey){e.preventDefault();if(window.DeviceInline?.hasDraft()){window.DeviceInline.announceBlocked();return;}if(window.CardInline?.hasDraft()){window.CardInline.announceBlocked();return;}window.AccountPilot?.remember();page=nav.dataset.page;const target=new URL(nav.href,location.href);const office=target.searchParams.get('office');if(office&&officeDefinitions.some(item=>item.id===office)){activeOffice=office;if(page==='cards'&&[...$('cardOfficeFilter').options].some(option=>option.value===office))$('cardOfficeFilter').value=office;}history.replaceState(null,'',target.pathname+target.search);render();}const editor=e.target.closest('[data-edit]');if(editor)edit(editor.dataset.edit);const toggle=e.target.closest('[data-publish]');if(toggle)await toggleDaily(toggle.dataset.publish);});
+document.addEventListener('click',async e=>{const collect=e.target.closest('[data-collect]');if(collect)await startBoardCollection([collect.dataset.collect],collect);const nav=e.target.closest('[data-page]');if(nav&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&!e.altKey){e.preventDefault();if(window.DeviceInline?.hasDraft()){window.DeviceInline.announceBlocked();return;}if(window.CardInline?.hasDraft()){window.CardInline.announceBlocked();return;}window.AccountPilot?.remember();page=nav.dataset.page;const target=new URL(nav.href,location.href);const office=target.searchParams.get('office');if(office&&officeDefinitions.some(item=>item.id===office)){activeOffice=office;if(page==='cards'&&[...$('cardOfficeFilter').options].some(option=>option.value===office))$('cardOfficeFilter').value=office;}history.replaceState(null,'',target.pathname+target.search);render();}const editor=e.target.closest('[data-edit]');if(editor)edit(editor.dataset.edit);const toggle=e.target.closest('[data-publish]');if(toggle)await toggleDaily(toggle.dataset.publish);});
 $('accountsBody').addEventListener('change',e=>{if(e.target.dataset.select){const id=e.target.dataset.select;e.target.checked?selected.add(id):selected.delete(id);render();}});
 $('selectAll').onchange=()=>{filtered().forEach(a=>$('selectAll').checked?selected.add(a.id):selected.delete(a.id));render();};
 $('applyBulk').onclick=async()=>{if(!selected.size)return toast('请先勾选账号');const ids=[...selected],status=$('bulkStatus').value,requestKey='bulk-status:'+ids.slice().sort().join(',')+':'+status;try{await api('/api/bulk-status',{ids,status,request_id:claimRequestId(requestKey)});settleRequestId(requestKey);selected.clear();await load();toast('账号状态已批量更新');}catch(error){settleRequestId(requestKey,error);toast(error.message);}};
@@ -314,24 +314,38 @@ $('editForm').onsubmit=async event=>{
 accountSearchFields.forEach(id=>{$(id).oninput=()=>{activeLifecyclePreset='';if(window.AccountPilot?.enabled())window.AccountPilot.scheduleFilter();else render();};$(id).onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();activeLifecyclePreset='';window.AccountPilot?.cancelFilter();render();}};});['computer','status','published','loginPhoneFilter','verificationFilter'].forEach(id=>$(id).onchange=render);$('date').onchange=()=>{selected.clear();if(data)return loadPublished($('date').value);};$('today').onclick=()=>{if(!data)return;$('date').value=data.today;return loadPublished(data.today);};$('refresh').onclick=load;$('clear').onclick=()=>{window.AccountPilot?.resetFilters();clearAccountSearch();activeLifecyclePreset='';['query','computer','status','published','accountType','lifecycleFilter','ageFilter','loginPhoneFilter'].forEach(id=>$(id).value='');selected.clear();render();};async function refreshFromFocus(){if(!data)return;if(window.boardLiveSync)return;const editing=['editor','cardEditor','phoneDeviceEditor','publishingMatchDialog','verificationEditor','batchEditor','employeeCardLinkDialog'].some(id=>$(id)?.open);if(Number.isInteger(data.cursor)&&typeof catchUpBoard==='function'){await catchUpBoard();return;}if(!editing)await load();}
 window.addEventListener('focus',()=>{const job=refreshFromFocus();job.catch(()=>{});return job;});openBoard();
 
+function collectionScopeSnapshot(explicitIds){
+ const rows=explicitIds!==undefined?(data?.accounts||[]):(typeof filtered==='function'?filtered():[]).filter(row=>page!=='board'||row.computer_id!=='unassigned');
+ const allowed=new Set(rows.map(row=>String(row.id))),picked=explicitIds!==undefined?new Set(explicitIds.map(String)):selected.size?new Set([...selected].map(String)):null;
+ const ids=[...new Set(rows.filter(row=>!picked||picked.has(String(row.id))).map(row=>String(row.id)))].sort();
+ return {ids,label:explicitIds!==undefined?`指定账号 ${ids.length} 个`:picked?`已选 ${ids.length} 个账号`:`当前筛选 ${ids.length} 个账号`,rejected:explicitIds!==undefined&&[...picked].some(id=>!allowed.has(id))};
+}
+function collectionVerificationReason(collection){const reason=String(collection?.pause_reason||'');return /登录(?:已)?失效|需要安全验证|需要验证/.test(reason)&&!/无需|不需要/.test(reason)?reason:'';}
 function renderBoardCollectionInfo(){
- const collection=data?.collection;
- if(!collection)return;
- $('collectionInfo').textContent=collection.enabled!==true?'采集暂未启用，历史记录可查看':
-   `${collection.worker_online?'采集器在线':'采集器离线'} · ${collection.paused?'队列已暂停':collection.waiting+' 个待处理'} · ${collection.failed} 个失败或待验证`;
+ const collection=data?.collection;if(!collection)return;
+ const feedback=boardCollectionFeedback(),access=boardCollectionAccess(),verifying=String(collection.worker_status||'').startsWith('等待手动登录或验证'),verificationReason=collectionVerificationReason(collection);
+ const permitted=hasPermission('collection_manage')&&access?.can_manage!==false,active=Number(collection.waiting)>0&&!collection.paused&&!verifying;
+ const count=value=>Number.isInteger(Number(value))&&value!==null&&value!==undefined&&Number(value)>=0?String(Number(value)):'—';
+ if($('collectionInfo'))$('collectionInfo').textContent='授权范围最近结果 · 待处理包含采集中；开始/暂停控制共享队列，暂停后当前账号采完再停';
+ if($('collectionScope'))$('collectionScope').textContent=collectionOperation?.label||(Number(collection.waiting)>0?`继续处理 ${count(collection.waiting)} 个未完成任务（含进行中），不会追加当前选择`:collectionScopeSnapshot().label);
+ if($('collectionStatus')){$('collectionStatus').textContent=feedback.pending?(collectionOperation?.kind==='pause'?'正在暂停…':'正在开始…'):collection.enabled!==true?'未启用':!collection.worker_online?'采集器离线':collection.paused?'已暂停':verificationReason?'待验证':active?'采集中':'待开始';$('collectionStatus').dataset.tone=feedback.error||feedback.failed||!collection.worker_online?'error':collection.paused||verificationReason?'warn':active?'good':'neutral';}
+ if($('collectionCounts'))$('collectionCounts').innerHTML=[['已采集',collection.done],['待处理',collection.waiting],['失败 / 待验证',collection.failed]].map(([label,value])=>`<span class="collection-metric"><span>${label}</span><strong>${count(value)}</strong></span>`).join('');
+ if($('collectionMessage')){const message=[feedback.message,feedback.error].filter(Boolean).join(' · ')||(!permitted?collectionSubmitReason():verificationReason?`采集记录提示：${verificationReason}；可在采集记录中打开验证窗口，完成后点击开始`:!collection.worker_online?'检查采集电脑连接后，再点击开始重试':collection.paused&&access?.can_control===false?'需要有全局采集控制权限的管理员开始共享队列':'');$('collectionMessage').textContent=message;$('collectionMessage').hidden=!message;$('collectionMessage').dataset.tone=feedback.error||feedback.failed?'error':'neutral';}
+ if($('collectionStart')){$('collectionStart').disabled=!permitted||collection.enabled!==true||!!feedback.pending||active;$('collectionStart').textContent=feedback.pending&&collectionOperation?.kind==='start'?'正在开始…':'开始采集';$('collectionStart').title=permitted&&!feedback.pending&&(collection.paused||verifying)&&!verificationReason?'点击开始，继续后台采集':collectionSubmitReason();}
+ if($('collectionPause')){$('collectionPause').disabled=!permitted||collection.enabled!==true||access?.can_control!==true||!!feedback.pending||!!collection.paused;$('collectionPause').title=access?.can_control===true?'当前账号完成后暂停，不取消等待任务':'需要全局作品采集控制权限';}
 }
 let collectionSubmitting=false,collectionStatusRequest=null,collectionControlPending=false;
-let collectionStatusOwner='',collectionStatusError='',collectionControlMessage='',collectionAwaitingWorker=false,collectionResumeAfter=0;
+let collectionStatusOwner='',collectionStatusError='',collectionControlMessage='',collectionControlError=false,collectionOperation=null;
 const collectionPendingRequests=new Map();
 function collectionUserId(){return String((data?.user||currentUser)?.id||'');}
-function boardCollectionFeedback(){return collectionStatusOwner===collectionUserId()?{pending:collectionControlPending,waiting:collectionAwaitingWorker,error:collectionStatusError,message:collectionControlMessage}:{};}
+function boardCollectionFeedback(){return collectionStatusOwner===collectionUserId()?{pending:collectionControlPending,error:collectionStatusError,message:collectionControlMessage,failed:collectionControlError}:{};}
 function collectionPageVisible(){return document.visibilityState!=='hidden'&&['board','accounts'].includes(page);}
 function refreshBoardCollection(options={}){
  if(!data||!collectionPageVisible()||!hasPermission('collection_manage'))return null;
  if(collectionStatusRequest)return collectionStatusRequest;
  if(collectionControlPending&&!options.control)return null;
  const source=data,userId=collectionUserId();
- if(collectionStatusOwner!==userId){collectionStatusOwner=userId;collectionStatusError='';collectionControlMessage='';collectionAwaitingWorker=false;collectionResumeAfter=0;}
+ if(collectionStatusOwner!==userId){collectionStatusOwner=userId;collectionStatusError='';collectionControlMessage='';collectionControlError=false;}
  if(boardCollectionAccess()?.denied&&!options.retry&&!options.control)return null;
  collectionStatusRequest=fetch('/api/collection/status',{cache:'no-store',signal:globalThis.AbortSignal?.timeout?.(8000)})
    .then(async response=>{
@@ -340,12 +354,7 @@ function refreshBoardCollection(options={}){
      if(!result?.collection||typeof result.collection.enabled!=='boolean'||typeof result.collection.worker_online!=='boolean'||typeof result.can_manage!=='boolean'||typeof result.can_control!=='boolean')throw Error('采集状态响应无效，保留上次状态');
      if(data!==source||collectionUserId()!==userId||!hasPermission('collection_manage'))return;
      data.collection=result.collection;data.collection_access={user_id:userId,can_manage:result.can_manage,can_control:result.can_control};collectionStatusError='';
-     const verifying=String(result.collection.worker_status||'').startsWith('等待手动登录或验证');
-     if(collectionAwaitingWorker&&Date.now()>=collectionResumeAfter){
-      collectionAwaitingWorker=false;
-      collectionControlMessage=result.collection.paused?'队列仍处于暂停，请核对原因后再明确继续':!result.collection.worker_online?'采集器尚未在线，请检查连接后重读状态':verifying?'采集器仍等待登录或验证，完成后可再次明确继续':'采集器状态已更新，可手动提交；尚未自动提交任何账号';
-     }
-     renderBoardCollectionInfo();applyCollectionPermissions();
+     applyCollectionPermissions();
    }).catch(error=>{
      if(data!==source||collectionUserId()!==userId)return;
      collectionStatusError=error.message||'读取采集状态失败，保留上次状态';
@@ -354,33 +363,77 @@ function refreshBoardCollection(options={}){
    }).finally(()=>{collectionStatusRequest=null;});
  return collectionStatusRequest;
 }
-async function resumeBoardCollection(){
- if(collectionControlPending||!data||!collectionPageVisible()||!hasPermission('collection_manage'))return;
- const source=data,userId=collectionUserId();
- collectionStatusOwner=userId;collectionControlPending=true;collectionStatusError='';collectionControlMessage='';applyCollectionPermissions();
- try{
-  // Finish every older status read before writing; never let it undo the result.
-  if(collectionStatusRequest)await collectionStatusRequest;
-  if(data!==source||collectionUserId()!==userId)return;
-  if(!boardCollectionAccess())await refreshBoardCollection({control:true});
-  if(data!==source||collectionUserId()!==userId||!hasPermission('collection_manage'))return;
-  if(boardCollectionAccess()?.can_control!==true){collectionStatusError='需要当前会话的全局作品采集控制权限';return;}
-  await api('/api/collection/settings',{resume:true},{fixedPayload:true,applyVersions:false});
-  if(data!==source||collectionUserId()!==userId)return;
-  collectionAwaitingWorker=true;collectionResumeAfter=Date.now()+3000;
-  collectionControlMessage='已通知继续，等待采集器状态更新；没有提交所选账号';
-  await refreshBoardCollection({control:true});
-  // One bounded follow-up for the worker's three-second heartbeat. The regular
-  // lightweight status read handles slower workers without full-board reloads.
-  setTimeout(()=>{if(data===source&&collectionUserId()===userId&&collectionPageVisible())void refreshBoardCollection();},3100);
- }catch(error){
-  if(data===source&&collectionUserId()===userId){collectionStatusError=error.status===undefined?'继续指令结果待确认，请重读采集状态后核对':error.message||'未能继续采集';if([401,403].includes(error.status))data.collection_access={user_id:userId,can_manage:false,can_control:false,denied:error.status};}
- }finally{collectionControlPending=false;if(data===source&&collectionUserId()===userId)applyCollectionPermissions();}
+function collectionOperationCurrent(operation){return data===operation.source&&collectionUserId()===operation.userId&&page===operation.page&&(typeof activeOffice==='undefined'?'':activeOffice)===operation.office&&collectionPageVisible()&&hasPermission('collection_manage');}
+function collectionMessage(message,trigger){collectionStatusOwner=collectionUserId();collectionControlMessage=message;const feedback=trigger?.closest('dialog[open]')?.querySelector('#accountPilotCollectionFeedback');if(feedback)feedback.textContent=message;renderBoardCollectionInfo();}
+async function readCollectionOperation(operation){
+ if(!collectionOperationCurrent(operation))throw Error('页面、办公室或登录状态已变化，本次未新增采集账号');
+ // A status flight started before the click must finish before any control write.
+ if(collectionStatusRequest)await collectionStatusRequest;
+ await refreshBoardCollection({control:true,retry:true});
+ if(!collectionOperationCurrent(operation))throw Error('页面、办公室或登录状态已变化，本次未新增采集账号');
+ if(collectionStatusError)throw Error(collectionStatusError);
+ if(!boardCollectionAccess())await refreshBoardCollection({control:true,retry:true});
+ if(collectionStatusError||boardCollectionAccess()?.can_manage!==true)throw Error(collectionStatusError||'当前会话没有作品采集管理权限');
+ if(data.collection?.enabled!==true)throw Error('采集暂未启用，已有数量和记录保留');
+ return data.collection;
+}
+function collectionReady(collection){return collection.worker_online&&!collection.paused&&!String(collection.worker_status||'').startsWith('等待手动登录或验证');}
+async function beginCollectionOperation(operation,run){
+ collectionOperation=operation;collectionStatusOwner=operation.userId;collectionControlPending=true;collectionStatusError='';collectionControlMessage='';collectionControlError=false;applyCollectionPermissions();
+ try{return await run();}
+ catch(error){if(data===operation.source&&collectionUserId()===operation.userId){collectionStatusError='';collectionControlError=true;const message=error.status===undefined&&operation.uncertainWrite?'操作结果待确认，再次点击开始会先核对状态，避免重复提交':error.message||'采集操作失败';if([401,403].includes(error.status))data.collection_access={user_id:operation.userId,can_manage:false,can_control:false,denied:error.status};collectionMessage(message,operation.trigger);}}
+ finally{if(collectionOperation===operation){collectionOperation=null;collectionControlPending=false;}if(data===operation.source&&collectionUserId()===operation.userId){applyCollectionPermissions();void refreshBoardCollection();}}
+}
+function newCollectionOperation(kind,label,trigger){return {kind,label,trigger,source:data,userId:collectionUserId(),page,office:typeof activeOffice==='undefined'?'':activeOffice};}
+function startBoardCollection(explicitIds,trigger){
+ if(collectionOperation)return collectionOperation.promise;
+ if(!data||!collectionPageVisible()||!hasPermission('collection_manage'))return;
+ const snapshot=collectionScopeSnapshot(explicitIds),operation=newCollectionOperation('start',snapshot.label,trigger);
+ operation.ids=Object.freeze(snapshot.ids);
+ operation.promise=beginCollectionOperation(operation,async()=>{
+  if(snapshot.rejected)throw Error('指定账号已不在当前授权资料内，本次未新增账号');
+  let collection=await readCollectionOperation(operation);
+  const existing=Number(collection.waiting)>0;
+  if(existing){operation.label=`继续处理 ${collection.waiting} 个未完成任务（含进行中）`;renderBoardCollectionInfo();}
+  if(!existing&&!operation.ids.length)throw Error('当前勾选与筛选范围内没有可采集账号');
+  if(operation.ids.length>2000)throw Error('每次最多采集2000个账号，请缩小范围');
+  if(!collection.worker_online)throw Error('采集器离线，请检查连接后再次点击开始');
+  if(!collectionReady(collection)){
+   if(boardCollectionAccess()?.can_control!==true)throw Error('共享采集队列已暂停或等待继续，请联系有全局采集控制权限的管理员');
+   operation.uncertainWrite=true;await api('/api/collection/settings',{resume:true},{fixedPayload:true,applyVersions:false});operation.uncertainWrite=false;
+   collectionMessage('已通知开始，正在等待采集器确认；尚未新增账号',trigger);
+   let ready=false;
+   for(let attempt=0;attempt<2;attempt++){
+    await new Promise(resolve=>setTimeout(resolve,3100));
+    collection=await readCollectionOperation(operation);
+    if(collectionReady(collection)){ready=true;break;}
+   }
+   if(!ready)throw Error(collectionVerificationReason(collection)?`采集记录提示：${collectionVerificationReason(collection)}；完成后再点击开始，本次未新增账号`:collection.paused?'队列仍暂停，请核对原因后再点击开始':!collection.worker_online?'采集器尚未在线，请检查连接后再点击开始':'采集器尚未确认开始，请稍后再次点击开始，本次未新增账号');
+  }
+  if(existing||Number(collection.waiting)>0){collectionMessage(`正在处理现有队列的 ${collection.waiting} 个未完成任务（含进行中）；本次选择未新增，完成后再开始新范围`,trigger);return;}
+  if(!collectionOperationCurrent(operation))throw Error('当前页面已变化，本次未新增账号');
+  await queue(operation.ids,trigger);
+ });
+ return operation.promise;
+}
+function pauseBoardCollection(){
+ if(collectionOperation)return collectionOperation.promise;
+ if(!data||!collectionPageVisible()||!hasPermission('collection_manage'))return;
+ const operation=newCollectionOperation('pause','暂停共享采集队列（当前账号完成后停止）');
+ operation.promise=beginCollectionOperation(operation,async()=>{
+  await readCollectionOperation(operation);
+  if(boardCollectionAccess()?.can_control!==true)throw Error('请联系有全局采集控制权限的管理员暂停队列');
+  operation.uncertainWrite=true;await api('/api/collection/settings',{pause:true},{fixedPayload:true,applyVersions:false});operation.uncertainWrite=false;
+  collectionMessage('已通知暂停；当前正在采集的账号完成后停止，等待任务保留，不取消任务');
+  await readCollectionOperation(operation);
+  if(!data.collection.paused)collectionMessage('暂停指令已发送，正在等待状态更新；当前账号可能仍在完成中');
+ });
+ return operation.promise;
 }
 async function queue(ids,trigger){
  if(collectionSubmitting)return;
  const feedback=trigger?.closest('dialog[open]')?.querySelector('#accountPilotCollectionFeedback');
- const show=message=>{if(feedback)feedback.textContent=message;else toast(message);};
+ const show=message=>{if(feedback)feedback.textContent=message;collectionMessage(message,trigger);};
  ids=[...new Set(ids)].sort();
  if(!ids.length)return show('没有可采集的账号');
  if(ids.length>2000)return show('每次最多采集 2000 个账号，请缩小筛选范围');
@@ -388,17 +441,21 @@ async function queue(ids,trigger){
  if(!collectionPendingRequests.has(key))collectionPendingRequests.set(key,newRequestId());
  collectionSubmitting=true;
  try{
-  const result=await api('/api/collection/enqueue',{ids,request_id:collectionPendingRequests.get(key)},{fixedPayload:true});
+  if(collectionOperation)collectionOperation.uncertainWrite=true;
+  const result=await api('/api/collection/enqueue',{ids,request_id:collectionPendingRequests.get(key)},{fixedPayload:true,applyVersions:false});
+  if(collectionOperation)collectionOperation.uncertainWrite=false;
   collectionPendingRequests.delete(key);
   const parts=[`已提交 ${result.queued} 个`];
   if(result.duplicate)parts.push(`${result.duplicate} 个已在队列`);
   if(result.missing)parts.push(`${result.missing} 个缺少抖音号或主页`);
   if(result.invalid)parts.push(`${result.invalid} 个主页格式待核对`);
   show(parts.join(' · '));
- }catch(error){if(error.status!==undefined)collectionPendingRequests.delete(key);show(error.message);}
+ }catch(error){if(error.status!==undefined)collectionPendingRequests.delete(key);throw error;}
  finally{collectionSubmitting=false;void refreshBoardCollection();}
 }
-$('collectVisible').onclick=()=>queue(filtered().filter(a=>page!=='board'||a.computer_id!=='unassigned').map(a=>a.id));$('collectSelected').onclick=()=>queue([...selected]);
+$('collectVisible').onclick=()=>startBoardCollection();$('collectSelected').onclick=()=>startBoardCollection();
+if($('collectionStart'))$('collectionStart').onclick=()=>startBoardCollection();
+if($('collectionPause'))$('collectionPause').onclick=pauseBoardCollection;
 document.addEventListener('toggle',event=>{if(event.target.open&&event.target.contains($('collectionBar')))void refreshBoardCollection();},true);
 window.addEventListener('focus',()=>{if(['board','accounts'].includes(page))void refreshBoardCollection();});
 document.addEventListener('board-ready',()=>{void refreshBoardCollection();});

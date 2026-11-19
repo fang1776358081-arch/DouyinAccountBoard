@@ -1,0 +1,42 @@
+/* The same visible collection controls on account, publishing and task pages. */
+.console-page .collection-panel {
+  display: block;
+  margin: 0 0 16px;
+  padding: 16px 20px;
+  border: 1px solid #dce5ef;
+  border-radius: 8px;
+  background: #fff;
+  color: #253449;
+}
+.collection-panel [hidden] { display: none !important; }
+.collection-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.collection-panel-heading { min-width: 0; }
+.collection-panel .collection-panel-heading strong,
+.collection-panel .collection-panel-heading h2 { display: inline; margin: 0; color: #253449; font-size: 15px; line-height: 24px; font-weight: 600; }
+.collection-panel .collection-panel-heading p { margin: 5px 0 0; color: #66778d; font-size: 12px; line-height: 20px; }
+.collection-panel-status { display: inline-flex; align-items: center; margin-left: 10px; padding: 1px 8px; border-radius: 4px; color: #607086; background: #f0f3f7; font-size: 12px; line-height: 22px; vertical-align: 1px; }
+.collection-panel-status[data-tone="good"] { color: #16705b; background: #eaf6f0; }
+.collection-panel-status[data-tone="warn"] { color: #96600d; background: #fff5de; }
+.collection-panel-status[data-tone="error"] { color: #a32922; background: #fff1f0; }
+.collection-panel-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.collection-panel .collection-panel-actions .button { min-width: 104px; min-height: 38px; padding: 7px 16px; font-size: 13px; line-height: 22px; font-weight: 500; }
+.collection-panel .collection-panel-actions .button.primary { border-color: #206bc4; background: #206bc4; color: #fff; }
+.collection-panel .collection-panel-actions .button.primary:hover:enabled { background: #185aa8; }
+.collection-panel .collection-panel-actions .button:disabled { opacity: .55; cursor: not-allowed; }
+.collection-panel-metrics { display: flex; align-items: center; gap: 28px; flex-wrap: wrap; margin-top: 14px; }
+#collectionBar .collection-panel-metrics { margin-top: 0; gap: 20px; }
+.collection-metric { display: inline-flex; align-items: baseline; gap: 7px; color: #66778d; font-size: 12px; line-height: 24px; }
+.collection-panel .collection-metric strong { color: #253449; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 28px; }
+.collection-panel-footer { display: flex; justify-content: space-between; gap: 8px 20px; flex-wrap: wrap; margin-top: 8px; }
+.collection-panel .collection-panel-footer p,
+.collection-panel .collection-panel-footer a { margin: 0; color: #7b8798; font-size: 11px; line-height: 20px; }
+.collection-panel .collection-panel-footer a { color: #206bc4; white-space: nowrap; text-decoration: none; }
+.collection-panel .collection-panel-message { margin: 10px 0 0; padding: 8px 10px; border-radius: 5px; background: #f4f7fc; color: #415b7d; font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
+.collection-panel .collection-panel-message[data-tone="error"] { color: #a32922; background: #fff1f0; }
+@media (max-width: 700px) {
+  .console-page .collection-panel { padding: 14px; }
+  .collection-panel-header { align-items: flex-start; gap: 12px; }
+  .collection-panel-actions { width: 100%; }
+  .collection-panel .collection-panel-actions .button { flex: 1; }
+  .collection-panel-metrics { gap: 12px 20px; }
+}
