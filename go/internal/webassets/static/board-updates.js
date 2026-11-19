@@ -16,6 +16,7 @@ let boardBackgroundReads=0;
 function boardReadControl(active){
  if(!active)return false;
  if(active.matches?.('.toolbar input, .toolbar select, .header-actions input, .header-actions select, [data-select], [data-batch-pick]'))return true;
+ if(active.type==='checkbox'&&active.dataset?.sheetColumn!==undefined)return true;
  const fields=[...(typeof accountSearchFields==='undefined'?[]:accountSearchFields),...(typeof cardSearchFields==='undefined'?[]:cardSearchFields),...(typeof deviceSearchFields==='undefined'?[]:deviceSearchFields),'date','computer','status','published','accountType','ageFilter','lifecycleFilter','loginPhoneFilter','verificationFilter','selectAll','cardOfficeFilter','cardStatus','cardCarrier','cardLinked','cardExpiry','cardTask','cardAssessment','cardCodeFilter','cardReturnFilter','cardPositionFilter','cardLinkedStateFilter','cardSourceFilter','deviceStateFilter','deviceOccupancyFilter','pendingReviewOffice','pendingReviewReason','pendingReviewCell'];
  return fields.includes(active.id)||active.type==='checkbox'&&(active.dataset?.select!==undefined||active.dataset?.batchPick!==undefined);
 }

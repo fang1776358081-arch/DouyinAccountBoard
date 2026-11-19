@@ -263,6 +263,44 @@ class Worker:
             body.update(blocked=True,error=body['error']+'；连续3次失败，队列暂停，请检查后继续')
         return self.deliver(job,body,once=once)
 
+    def delivery_receipt(self,job,body,result):
+        # Only configured, non-static F2 output receives these local receipts.
+        if not hasattr(self,'output'):return
+        filename=None
+        try:
+            ok=result.get('ok') is True
+            ignored=result.get('ignored') is True
+            count=body.get('count')
+            valid_count=type(count) is int and 0 <= count <= 10000000 and not body.get('error')
+            raw=body.get('source_url')
+            parsed=urlsplit(raw.strip()) if isinstance(raw,str) else None
+            source=('https://www.douyin.com'+parsed.path.rstrip('/') if parsed and
+                    parsed.scheme=='https' and parsed.netloc=='www.douyin.com' and
+                    re.fullmatch(r'/user/[A-Za-z0-9_-]{5,200}/?',parsed.path) else None)
+            sampled_at=None
+            if isinstance(body.get('sampled_at'),str):
+                try:
+                    sampled=datetime.fromisoformat(body['sampled_at'].replace('Z','+00:00'))
+                    if sampled.tzinfo:sampled_at=sampled.astimezone(timezone.utc).isoformat(timespec='microseconds')
+                except ValueError:pass
+            persisted=bool(ok and not ignored and valid_count and source)
+            receipt={'account_id':job['account_id'],'douyin_id':job['douyin_id'],
+                'sampled_at':sampled_at,'deliveredAt':datetime.now(timezone.utc).isoformat(timespec='microseconds'),
+                'server_origin':self.origin,'ok':ok,'duplicate':result.get('duplicate') is True,
+                'ignored':ignored,'persisted':persisted,'status':'success' if persisted else 'failed'}
+            if valid_count:receipt['count']=count
+            if source and valid_count:receipt['source_url']=source
+            with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',prefix='delivery-',suffix='.json',
+                                             dir=self.output,delete=False) as stream:
+                filename=stream.name
+                json.dump(receipt,stream,ensure_ascii=False)
+                stream.write('\n')
+        except (OSError,ValueError,TypeError):
+            if filename:
+                try:os.unlink(filename)
+                except OSError:pass
+            print('服务器回执已收到，但本机回执文件未保存',file=sys.stderr,flush=True)
+
     def deliver(self,job,body,*,once=False):
         attempts=0
         # Keep retrying delivery, never make a second upstream request for the same lease.
@@ -270,7 +308,6 @@ class Worker:
             attempts+=1
             try:
                 result=self.request('/api/collection/result',body)
-                return bool(result.get('ok') and not body.get('error'))
             except HTTPError as error:
                 if error.code==400 and 'count' in body:
                     if once and attempts>=3:raise RuntimeError('未能确认采集结果已送达') from None
@@ -279,6 +316,11 @@ class Worker:
                     continue
                 if error.code<500 and error.code not in (408,429):raise
             except (OSError,ValueError):pass
+            else:
+                # Receipt I/O is outside the transport retry block: never resend
+                # or scrape again because a confirmed response cannot be logged.
+                self.delivery_receipt(job,body,result)
+                return result.get('ok') is True and result.get('ignored') is not True and not body.get('error')
             if once and attempts>=3:raise RuntimeError('未能确认采集结果已送达')
             time.sleep(5)
 

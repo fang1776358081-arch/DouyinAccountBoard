@@ -13,10 +13,36 @@ function applyPermissions(){
 }
 function collectionSubmitReason(){
  const collection=data?.collection;
- return !hasPermission('collection_manage')?'需要作品采集管理权限':collection?.enabled!==true?'采集暂未启用；历史记录保留':collection.paused?'采集队列已暂停':!collection.worker_online?'本机采集器离线':'';
+ const access=boardCollectionAccess(),feedback=typeof boardCollectionFeedback==='function'?boardCollectionFeedback():{};
+ return !hasPermission('collection_manage')||access?.can_manage===false?(access?.denied===401?'登录已失效，请重新登录':'需要作品采集管理权限'):collection?.enabled!==true?'采集暂未启用；历史记录保留':feedback.pending?'正在通知采集器继续…':feedback.waiting?'等待采集器确认继续，请稍候':collection.paused?'采集队列已暂停':!collection.worker_online?'本机采集器离线':String(collection.worker_status||'').startsWith('等待手动登录或验证')?'采集器等待继续，请先确认登录或验证':'';
+}
+function boardCollectionAccess(){
+ const access=data?.collection_access;
+ return access?.user_id===String((data?.user||currentUser)?.id||'')?access:null;
+}
+function collectionActionHint(button,prefix){
+ if(!button||typeof button.insertAdjacentElement!=='function')return;
+ let group=$(prefix+'Actions');
+ if(!group){
+  group=document.createElement('span');group.id=prefix+'Actions';group.className='collection-actions';
+  const reason=document.createElement('span');reason.id=prefix+'Reason';reason.setAttribute('role','status');
+  const resume=document.createElement('button');resume.id=prefix+'Resume';resume.type='button';resume.className='button';resume.onclick=()=>{if(typeof resumeBoardCollection==='function')void resumeBoardCollection();};
+  const link=document.createElement('a');link.id=prefix+'Queue';link.className='text-button';link.href='/collection.html';link.textContent='查看采集队列';
+  const refresh=document.createElement('button');refresh.id=prefix+'Refresh';refresh.type='button';refresh.className='text-button';refresh.textContent='重读采集状态';refresh.onclick=()=>{if(typeof refreshBoardCollection==='function')void refreshBoardCollection({retry:true});};
+  group.append(reason,resume,link,refresh);button.insertAdjacentElement('afterend',group);
+ }
+ const access=boardCollectionAccess(),feedback=typeof boardCollectionFeedback==='function'?boardCollectionFeedback():{};
+ const permitted=hasPermission('collection_manage')&&access?.can_manage!==false;
+ const collection=data?.collection,verifying=String(collection?.worker_status||'').startsWith('等待手动登录或验证');
+ $(prefix+'Reason').textContent=[collectionSubmitReason()||'可手动提交采集',feedback.message,feedback.error].filter(Boolean).join(' · ');
+ const resume=$(prefix+'Resume');resume.hidden=!permitted||access?.can_control!==true||collection?.enabled!==true||(!collection.paused&&!verifying&&!feedback.waiting&&!feedback.pending);
+ resume.disabled=!!feedback.pending||!!feedback.waiting||!collection?.worker_online;
+ resume.textContent=verifying?'确认登录或验证后继续':'继续手动采集';
+ $(prefix+'Queue').hidden=!permitted;
+ $(prefix+'Refresh').hidden=!hasPermission('collection_manage');$(prefix+'Refresh').disabled=!!feedback.pending;
 }
 function applyCollectionPermissions(){
- const permitted=hasPermission('collection_manage');
+ const permitted=hasPermission('collection_manage')&&boardCollectionAccess()?.can_manage!==false;
  const submitReason=collectionSubmitReason();
  const detailReason=$('accountPilotCollectionReason');
  if(detailReason)detailReason.textContent=submitReason||'手动采集公开作品数量';
@@ -26,6 +52,7 @@ function applyCollectionPermissions(){
  $('autoCollect').closest('label').hidden=true;$('autoCollect').checked=false;$('autoCollect').disabled=true;
  for(const id of ['pauseCollect','cancelCollect','resumeCollect','openCollector']){$(id).hidden=true;$(id).disabled=true;}
  if($('collectionQueueLink'))$('collectionQueueLink').hidden=!permitted;
+ collectionActionHint($('collectSelected'),'accountCollection');collectionActionHint($('collectVisible'),'boardCollection');
 }
 function applyAccountPermissions(account){
  const manage=hasPermission(account.id?'account_manage':'account_create'),status=hasPermission('account_status'),progress=hasPermission('account_progress');

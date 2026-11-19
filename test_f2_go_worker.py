@@ -197,6 +197,93 @@ class GoWorkerTest(unittest.TestCase):
         self.assertNotIn('count',worker.deliver.call_args.args[1])
         self.assertIn('sampled_at',worker.deliver.call_args.args[1])
 
+    def delivery_body(self,**changed):
+        return {'account_id':JOB['account_id'],'token':JOB['token'],'count':1961,
+                'source_url':PROFILE_URL,'matched_douyin_id':JOB['douyin_id'],
+                'sampled_at':'2026-11-19T12:34:56.123456+00:00',**changed}
+
+    def test_delivery_receipt_records_only_confirmed_allowlisted_values_and_canonical_url(self):
+        worker=self.worker(DOUYIN_BOARD_WORKER_ORIGIN='http://127.0.0.1:18880')
+        secret='synthetic-secret-that-must-never-be-saved'
+        body=self.delivery_body(count=0,source_url=PROFILE_URL+'/?share='+secret+'#'+secret,
+                                cookie=secret,headers={'Authorization':secret})
+        worker.request=Mock(return_value={'ok':True,'duplicate':False,'ignored':False,'debug':secret})
+        with tempfile.TemporaryDirectory() as folder:
+            worker.output=Path(folder)
+            self.assertTrue(worker.deliver({**JOB,'cookie':secret},body,once=True))
+            files=list(worker.output.glob('delivery-*.json'));self.assertEqual(len(files),1)
+            text=files[0].read_text(encoding='utf-8');receipt=json.loads(text)
+            if os.name!='nt':self.assertEqual(stat.S_IMODE(files[0].stat().st_mode),0o600)
+        self.assertEqual(receipt['count'],0);self.assertEqual(receipt['source_url'],PROFILE_URL)
+        self.assertEqual(receipt['server_origin'],'http://127.0.0.1:18880')
+        self.assertEqual(receipt['sampled_at'],body['sampled_at']);self.assertIn('deliveredAt',receipt)
+        self.assertTrue(receipt['ok']);self.assertTrue(receipt['persisted']);self.assertEqual(receipt['status'],'success')
+        self.assertEqual(set(receipt),{'account_id','douyin_id','count','source_url','sampled_at','deliveredAt',
+            'server_origin','ok','duplicate','ignored','persisted','status'})
+        for hidden in (TOKEN,JOB['token'],secret,'Authorization','cookie','headers','matched_douyin_id'):
+            self.assertNotIn(hidden,text)
+
+    def test_ignored_and_non_boolean_ok_cannot_be_reported_as_persisted_success(self):
+        for result in ({'ignored':True},{'ok':True,'ignored':True},{'ok':1},{'ok':'true'},{'ok':False}):
+            with self.subTest(result=result),tempfile.TemporaryDirectory() as folder:
+                worker=self.worker();worker.output=Path(folder);worker.request=Mock(return_value=result)
+                self.assertFalse(worker.deliver(JOB,self.delivery_body(),once=True))
+                receipt=json.loads(next(worker.output.glob('delivery-*.json')).read_text(encoding='utf-8'))
+                self.assertFalse(receipt['persisted']);self.assertEqual(receipt['status'],'failed')
+                self.assertEqual(receipt['ok'],result.get('ok') is True)
+
+    def test_failed_receipt_never_writes_zero_or_error_details_or_overwrites_prior_success(self):
+        worker=self.worker();worker.request=Mock(return_value={'ok':True})
+        with tempfile.TemporaryDirectory() as folder:
+            worker.output=Path(folder)
+            self.assertTrue(worker.deliver(JOB,self.delivery_body(),once=True))
+            original=next(worker.output.glob('delivery-*.json'));before=original.read_bytes()
+            failed=self.delivery_body(error='synthetic-private-error',count=0)
+            self.assertFalse(worker.deliver(JOB,failed,once=True))
+            self.assertEqual(original.read_bytes(),before)
+            receipts=[json.loads(file.read_text(encoding='utf-8')) for file in worker.output.glob('delivery-*.json')]
+        failed=next(receipt for receipt in receipts if receipt['status']=='failed')
+        self.assertFalse(failed['persisted']);self.assertNotIn('count',failed);self.assertNotIn('source_url',failed)
+        self.assertNotIn('synthetic-private-error',json.dumps(receipts))
+
+    def test_delivery_receipts_reject_boolean_negative_or_excessive_count(self):
+        for count in (True,-1,10000001,None):
+            with self.subTest(count=count),tempfile.TemporaryDirectory() as folder:
+                worker=self.worker();worker.output=Path(folder);worker.request=Mock(return_value={'ok':False})
+                self.assertFalse(worker.deliver(JOB,self.delivery_body(count=count),once=True))
+                receipt=json.loads(next(worker.output.glob('delivery-*.json')).read_text(encoding='utf-8'))
+                self.assertNotIn('count',receipt);self.assertNotIn('source_url',receipt);self.assertFalse(receipt['persisted'])
+
+    def test_receipt_io_failure_does_not_retry_delivery_or_repeat_upstream_or_leak_error(self):
+        worker=self.worker();worker.output=Path('synthetic-output')
+        worker.query=Mock(return_value={'status':'success','account':JOB['douyin_id'],'count':1961,'url':PROFILE_URL})
+        worker.request=Mock(return_value={'ok':True})
+        with patch.object(f2_worker.tempfile,'NamedTemporaryFile',side_effect=OSError(TOKEN)), \
+             patch.object(f2_worker.time,'sleep') as slept,patch('builtins.print') as output:
+            self.assertTrue(worker.collect(JOB,once=True))
+        worker.query.assert_called_once_with(JOB);worker.request.assert_called_once();slept.assert_not_called()
+        self.assertEqual(output.call_args.args,('服务器回执已收到，但本机回执文件未保存',))
+        self.assertNotIn(TOKEN,str(output.call_args))
+
+    def test_delivery_retry_reuses_same_sample_then_records_duplicate_ack_once(self):
+        worker=self.worker(DOUYIN_BOARD_WORKER_ORIGIN='http://127.0.0.1:8187')
+        worker.query=Mock(return_value={'status':'success','account':JOB['douyin_id'],'count':1961,'url':PROFILE_URL})
+        worker.request=Mock(side_effect=[OSError('synthetic transport failure'),{'ok':True,'duplicate':True}])
+        with tempfile.TemporaryDirectory() as folder,patch.object(f2_worker.time,'sleep'):
+            worker.output=Path(folder);self.assertTrue(worker.collect(JOB,once=True))
+            files=list(worker.output.glob('delivery-*.json'));self.assertEqual(len(files),1)
+            receipt=json.loads(files[0].read_text(encoding='utf-8'))
+        worker.query.assert_called_once_with(JOB);self.assertEqual(worker.request.call_count,2)
+        self.assertEqual(worker.request.call_args_list[0],worker.request.call_args_list[1])
+        self.assertEqual(receipt['server_origin'],'http://127.0.0.1:8187')
+        self.assertTrue(receipt['duplicate']);self.assertTrue(receipt['persisted']);self.assertEqual(receipt['count'],1961)
+
+    def test_receipt_is_optional_without_a_configured_output(self):
+        worker=self.worker();worker.request=Mock(return_value={'ok':True})
+        with patch.object(f2_worker.tempfile,'NamedTemporaryFile') as opened:
+            self.assertTrue(worker.deliver(JOB,self.delivery_body(),once=True))
+        opened.assert_not_called();worker.request.assert_called_once()
+
     def test_verification_marker_is_observed_without_emitting_upstream_output(self):
         waiting=threading.Event()
         raw='other output\n搜索接口要求安全验证（verify_check）。窗口已保留；请本人验证\n'.encode('utf-8')

@@ -320,17 +320,62 @@ function renderBoardCollectionInfo(){
  $('collectionInfo').textContent=collection.enabled!==true?'采集暂未启用，历史记录可查看':
    `${collection.worker_online?'采集器在线':'采集器离线'} · ${collection.paused?'队列已暂停':collection.waiting+' 个待处理'} · ${collection.failed} 个失败或待验证`;
 }
-let collectionSubmitting=false,collectionStatusRequest=null;
+let collectionSubmitting=false,collectionStatusRequest=null,collectionControlPending=false;
+let collectionStatusOwner='',collectionStatusError='',collectionControlMessage='',collectionAwaitingWorker=false,collectionResumeAfter=0;
 const collectionPendingRequests=new Map();
-function refreshBoardCollection(){
- if(!data||collectionStatusRequest)return collectionStatusRequest;
- const source=data;
+function collectionUserId(){return String((data?.user||currentUser)?.id||'');}
+function boardCollectionFeedback(){return collectionStatusOwner===collectionUserId()?{pending:collectionControlPending,waiting:collectionAwaitingWorker,error:collectionStatusError,message:collectionControlMessage}:{};}
+function collectionPageVisible(){return document.visibilityState!=='hidden'&&['board','accounts'].includes(page);}
+function refreshBoardCollection(options={}){
+ if(!data||!collectionPageVisible()||!hasPermission('collection_manage'))return null;
+ if(collectionStatusRequest)return collectionStatusRequest;
+ if(collectionControlPending&&!options.control)return null;
+ const source=data,userId=collectionUserId();
+ if(collectionStatusOwner!==userId){collectionStatusOwner=userId;collectionStatusError='';collectionControlMessage='';collectionAwaitingWorker=false;collectionResumeAfter=0;}
+ if(boardCollectionAccess()?.denied&&!options.retry&&!options.control)return null;
  collectionStatusRequest=fetch('/api/collection/status',{cache:'no-store',signal:globalThis.AbortSignal?.timeout?.(8000)})
-   .then(async response=>response.ok?response.json():null).then(result=>{
-     if(!result?.collection||data!==source)return;
-     data.collection=result.collection;renderBoardCollectionInfo();applyCollectionPermissions();
-   }).catch(()=>{}).finally(()=>{collectionStatusRequest=null;});
+   .then(async response=>{
+     if(!response.ok){const error=Error(response.status===401?'登录已失效，请重新登录':response.status===403?'暂无作品采集管理权限':'读取采集状态失败，保留上次状态');error.status=response.status;throw error;}
+     const result=await response.json();
+     if(!result?.collection||typeof result.collection.enabled!=='boolean'||typeof result.collection.worker_online!=='boolean'||typeof result.can_manage!=='boolean'||typeof result.can_control!=='boolean')throw Error('采集状态响应无效，保留上次状态');
+     if(data!==source||collectionUserId()!==userId||!hasPermission('collection_manage'))return;
+     data.collection=result.collection;data.collection_access={user_id:userId,can_manage:result.can_manage,can_control:result.can_control};collectionStatusError='';
+     const verifying=String(result.collection.worker_status||'').startsWith('等待手动登录或验证');
+     if(collectionAwaitingWorker&&Date.now()>=collectionResumeAfter){
+      collectionAwaitingWorker=false;
+      collectionControlMessage=result.collection.paused?'队列仍处于暂停，请核对原因后再明确继续':!result.collection.worker_online?'采集器尚未在线，请检查连接后重读状态':verifying?'采集器仍等待登录或验证，完成后可再次明确继续':'采集器状态已更新，可手动提交；尚未自动提交任何账号';
+     }
+     renderBoardCollectionInfo();applyCollectionPermissions();
+   }).catch(error=>{
+     if(data!==source||collectionUserId()!==userId)return;
+     collectionStatusError=error.message||'读取采集状态失败，保留上次状态';
+     if([401,403].includes(error.status))data.collection_access={user_id:userId,can_manage:false,can_control:false,denied:error.status};
+     applyCollectionPermissions();
+   }).finally(()=>{collectionStatusRequest=null;});
  return collectionStatusRequest;
+}
+async function resumeBoardCollection(){
+ if(collectionControlPending||!data||!collectionPageVisible()||!hasPermission('collection_manage'))return;
+ const source=data,userId=collectionUserId();
+ collectionStatusOwner=userId;collectionControlPending=true;collectionStatusError='';collectionControlMessage='';applyCollectionPermissions();
+ try{
+  // Finish every older status read before writing; never let it undo the result.
+  if(collectionStatusRequest)await collectionStatusRequest;
+  if(data!==source||collectionUserId()!==userId)return;
+  if(!boardCollectionAccess())await refreshBoardCollection({control:true});
+  if(data!==source||collectionUserId()!==userId||!hasPermission('collection_manage'))return;
+  if(boardCollectionAccess()?.can_control!==true){collectionStatusError='需要当前会话的全局作品采集控制权限';return;}
+  await api('/api/collection/settings',{resume:true},{fixedPayload:true,applyVersions:false});
+  if(data!==source||collectionUserId()!==userId)return;
+  collectionAwaitingWorker=true;collectionResumeAfter=Date.now()+3000;
+  collectionControlMessage='已通知继续，等待采集器状态更新；没有提交所选账号';
+  await refreshBoardCollection({control:true});
+  // One bounded follow-up for the worker's three-second heartbeat. The regular
+  // lightweight status read handles slower workers without full-board reloads.
+  setTimeout(()=>{if(data===source&&collectionUserId()===userId&&collectionPageVisible())void refreshBoardCollection();},3100);
+ }catch(error){
+  if(data===source&&collectionUserId()===userId){collectionStatusError=error.status===undefined?'继续指令结果待确认，请重读采集状态后核对':error.message||'未能继续采集';if([401,403].includes(error.status))data.collection_access={user_id:userId,can_manage:false,can_control:false,denied:error.status};}
+ }finally{collectionControlPending=false;if(data===source&&collectionUserId()===userId)applyCollectionPermissions();}
 }
 async function queue(ids,trigger){
  if(collectionSubmitting)return;
@@ -356,4 +401,7 @@ async function queue(ids,trigger){
 $('collectVisible').onclick=()=>queue(filtered().filter(a=>page!=='board'||a.computer_id!=='unassigned').map(a=>a.id));$('collectSelected').onclick=()=>queue([...selected]);
 document.addEventListener('toggle',event=>{if(event.target.open&&event.target.contains($('collectionBar')))void refreshBoardCollection();},true);
 window.addEventListener('focus',()=>{if(['board','accounts'].includes(page))void refreshBoardCollection();});
+document.addEventListener('board-ready',()=>{void refreshBoardCollection();});
+document.addEventListener('visibilitychange',()=>{if(collectionPageVisible())void refreshBoardCollection();});
+if(typeof setInterval==='function')setInterval(()=>{if(collectionPageVisible())void refreshBoardCollection();},8000);
 {const boardUpdates=document.createElement('script');boardUpdates.src='/board-updates.js?v=20261104-pilot1';boardUpdates.onload=()=>{if(typeof startBoardLiveSync==='function')startBoardLiveSync();};document.body.appendChild(boardUpdates);}
