@@ -16,7 +16,7 @@
   <main>
     <header>
       <div><div class="eyebrow">日常工作 / 作品采集</div><h1>作品采集</h1></div>
-      <div class="collection-toolbar"><button class="button" id="collectionRefresh">刷新</button><a class="button primary" href="/?page=accounts" id="collectionAccountLink" hidden>选择账号采集</a></div>
+      <div class="collection-toolbar"><button class="button" id="collectionRefresh">刷新</button><button class="button" id="collectionOpenBrowser" data-collection-command="open_browser" hidden disabled>打开采集窗口</button><a class="button primary" href="/?page=accounts" id="collectionAccountLink" hidden>选择账号采集</a></div>
     </header>
     <p id="collectionNotice" role="status">正在读取采集队列…</p>
     <p id="collectionError" role="alert" hidden></p>
@@ -27,7 +27,6 @@
         <details class="collection-controls" id="collectionControls" hidden>
           <summary>队列设置</summary>
           <div class="collection-toolbar">
-            <button class="button" data-collection-command="open_browser">打开采集浏览器</button>
             <button class="button" data-collection-command="resume">继续队列</button>
             <button class="button" data-collection-command="pause">暂停队列</button>
             <button class="button" data-collection-command="cancel_waiting">取消等待任务</button>

@@ -26,16 +26,22 @@
 
   function renderControls(){
     const c=status.collection;
+    const verifying=c.worker_online&&String(c.worker_status||'').startsWith('等待手动登录或验证');
     $('collectionAccountLink').hidden=!status.can_manage;
     $('collectionControls').hidden=!status.can_control;
+    $('collectionOpenBrowser').hidden=!status.can_control;
+    $('collectionOpenBrowser').disabled=writing||!c.browser_control;
+    $('collectionOpenBrowser').title=c.browser_control?'窗口在已连接的采集电脑打开；请在窗口内完成登录或验证':'采集电脑离线或未提供图形窗口，请先启动采集器';
+    if(verifying)$('collectionControls').open=true;
     for(const button of $('collectionControls').querySelectorAll('button')){
       const command=button.dataset.collectionCommand;
       button.disabled=writing||(command==='open_browser'&&!c.browser_control)||
-        (command==='pause'&&!!c.paused)||(command==='resume'&&!c.paused)||(command==='cancel_waiting'&&!c.waiting);
+        (command==='pause'&&!!c.paused)||(command==='resume'&&(!c.worker_online||(!c.paused&&!verifying)))||(command==='cancel_waiting'&&!c.waiting);
+      if(command==='resume')button.textContent=verifying?'验证完成，继续':'继续队列';
     }
     if(!c.enabled){notice('采集暂未启用，历史记录可查看。');return;}
     const online=c.worker_online?'采集器在线 · '+c.worker_status:'采集器离线，请启动已配置的本机采集器';
-    notice(`${online} · ${c.paused?'队列已暂停'+(c.pause_reason?'：'+c.pause_reason:''):c.waiting+' 个待处理'}`);
+    notice(`${online} · ${verifying?'请在采集电脑窗口完成验证，再点“验证完成，继续”':c.paused?'队列已暂停'+(c.pause_reason?'：'+c.pause_reason:''):c.waiting+' 个待处理'}`);
   }
 
   function renderRows(result){
@@ -79,6 +85,7 @@
       if(serial!==requestNumber)return;
       if(error.status===401||error.status===403){
         $('collectionSheet').hidden=true;$('collectionRows').textContent='';$('collectionAccountLink').hidden=true;status=null;
+        $('collectionOpenBrowser').hidden=true;$('collectionOpenBrowser').disabled=true;$('collectionControls').hidden=true;
       }
       fail(error);
     }
@@ -127,7 +134,7 @@
       else{
         const result=await api('/api/collection/settings',{[command]:true});
         message=command==='cancel_waiting'?`已取消 ${result.cancelled} 个等待任务`:
-          ({open_browser:'已通知本机采集器打开登录窗口',pause:'队列已暂停，当前任务将继续完成',resume:'已继续队列'})[command];
+          ({open_browser:'已通知采集电脑打开窗口；窗口在采集电脑显示',pause:'队列已暂停，当前任务将继续完成',resume:'已通知采集器继续，请查看采集状态'})[command];
       }
     }catch(failure){error=failure;}
     writing=false;
@@ -148,6 +155,7 @@
       $('collectionCancelDialog').returnValue='';$('collectionCancelDialog').showModal();
     }else void act(button.dataset.collectionCommand);
   };
+  $('collectionOpenBrowser').onclick=()=>{if(!$('collectionOpenBrowser').disabled)void act('open_browser');};
   $('collectionCancelDialog').onclose=()=>{if($('collectionCancelDialog').returnValue==='cancel')void act('cancel_waiting');};
   void start();
 })();

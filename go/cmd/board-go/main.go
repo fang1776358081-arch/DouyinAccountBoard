@@ -57,6 +57,7 @@ func run() error {
 	cloudbase := flag.Bool("cloudbase-postgres", false, "Use the existing production CloudBase PostgreSQL environment")
 	initDatabase := flag.Bool("init-db", false, "Initialize an empty local PostgreSQL database and exit")
 	autoBackup := flag.Bool("auto-backup", false, "Enable scheduled PostgreSQL business snapshots")
+	collectionTokenFile := flag.String("collection-token-file", "", "Private file containing the token for a loopback-only collection worker")
 	showVersion := flag.Bool("version", false, "Print the Go workbench build ID and exit")
 	flag.Parse()
 	if *showVersion {
@@ -83,6 +84,14 @@ func run() error {
 	} else if !isLoopback(listenHost) {
 		return errors.New("非本机监听需要明确配置浏览器来源")
 	}
+	collectionToken, err := resolveCollectionToken(collectionTokenConfig{
+		FilePath: *collectionTokenFile, EnvironmentToken: os.Getenv("BOARD_GO_COLLECTION_TOKEN"),
+		ListenHost: listenHost, PublicOrigin: *public, CloudBase: *cloudbase,
+		Legacy: legacyOrigin != nil, Initialize: *initDatabase,
+	})
+	if err != nil {
+		return err
+	}
 
 	lifecycle, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -91,7 +100,7 @@ func run() error {
 	if *cloudbase {
 		if dsn != "" || legacyOrigin != nil || *public == "" || *initDatabase ||
 			os.Getenv("BOARD_GO_SETUP_KEY") != "" || os.Getenv("BOARD_GO_COLLECTION_TOKEN") != "" {
-			return errors.New("CloudBase 模式须配置原网站来源，不能同时使用本机连接串、旧版代理、初始化或采集")
+			return errors.New("CloudBase 模式须配置原网站来源，不能同时使用本机连接串、旧版代理、初始化或环境采集令牌")
 		}
 		config, err := parseCloudBaseConfig(os.Getenv)
 		if err != nil {
@@ -135,11 +144,6 @@ func run() error {
 	if setupKey != "" && (!isLoopback(listenHost) || *public != "" || legacyOrigin != nil || len(setupKey) < 24 || len(setupKey) > 256) {
 		return errors.New("首次设置密钥需要 24 至 256 位，仅在本机独立监听时启用")
 	}
-	collectionToken := os.Getenv("BOARD_GO_COLLECTION_TOKEN")
-	if collectionToken != "" && (!isLoopback(listenHost) || *public != "" || legacyOrigin != nil || !collection.ValidToken(collectionToken)) {
-		return errors.New("作品采集需要 32 至 256 位可见 ASCII 令牌，仅在本机独立监听时启用")
-	}
-
 	gatewayHandler := gateway.New(gateway.Config{LegacyOrigin: legacyOrigin, PublicOrigin: *public, Database: db})
 	mux := http.NewServeMux()
 	mux.Handle("/", gatewayHandler)
