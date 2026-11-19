@@ -295,9 +295,68 @@ class GoWorkerTest(unittest.TestCase):
             self.assertEqual(worker.failures,3);worker.deliver.assert_called_once()
             body=worker.deliver.call_args.args[1]
             self.assertEqual(body['error'],f2_worker.ERRORS[code]);self.assertTrue(body['profile_required']);self.assertFalse(body['blocked'])
-            self.assertNotIn('count',body);self.assertNotIn('source_url',body)
+            self.assertNotIn('count',body);self.assertNotIn('source_url',body);self.assertNotIn('sampled_at',body)
             self.assertEqual(worker.query(job),{'status':'failed','error':code})
             worker.launch.assert_not_called()
+
+    def test_real_success_and_failure_still_have_one_sampling_timestamp(self):
+        for row in ({'status':'success','account':JOB['douyin_id'],'count':0,'url':PROFILE_URL},
+                    {'status':'failed','error':'RuntimeError'}):
+            worker=self.worker();worker.query=Mock(return_value=row);worker.deliver=Mock(return_value=False)
+            worker.collect(JOB,once=True);worker.query.assert_called_once();worker.deliver.assert_called_once()
+            body=worker.deliver.call_args.args[1]
+            self.assertIsNotNone(f2_worker.datetime.fromisoformat(body['sampled_at']).tzinfo)
+            self.assertNotIn('profile_required',body)
+            if row['status']=='success':self.assertEqual(body['count'],0)
+            else:self.assertNotIn('count',body)
+
+    def test_profile_required_receipt_is_needs_profile_without_a_sample_or_failed_count(self):
+        for code in ('ProfileMissing','ProfileConflict'):
+            worker=self.worker();worker.request=Mock(return_value={'ok':True})
+            body={'account_id':JOB['account_id'],'token':JOB['token'],'error':f2_worker.ERRORS[code],
+                  'profile_required':True,'blocked':False}
+            with tempfile.TemporaryDirectory() as folder:
+                worker.output=Path(folder);self.assertFalse(worker.deliver(JOB,body,once=True))
+                receipt=json.loads(next(worker.output.glob('delivery-*.json')).read_text(encoding='utf-8'))
+            self.assertEqual(receipt['status'],'needs_profile');self.assertTrue(receipt['ok']);self.assertFalse(receipt['persisted'])
+            self.assertNotIn('sampled_at',receipt);self.assertNotIn('count',receipt);self.assertNotIn('source_url',receipt)
+            self.assertIn('deliveredAt',receipt)
+
+    def run_http_failure(self,raw,route='/api/collection/result'):
+        secret='synthetic-private-response-value'
+        error=f2_worker.HTTPError('http://127.0.0.1:18790/'+secret,400,secret,{'Set-Cookie':secret},io.BytesIO(raw))
+        worker=self.worker();worker.headless=True;worker.opener=Mock();worker.opener.open.side_effect=error
+        worker.poll=Mock(side_effect=lambda **unused:worker.request(route,{'token':TOKEN,'account_id':JOB['account_id']}))
+        with patch('builtins.print') as output:self.assertEqual(worker.run(once=True),1)
+        rendered=str(output.call_args_list)
+        for hidden in (secret,TOKEN,JOB['account_id'],'Set-Cookie','Authorization','SELECT * FROM'):
+            self.assertNotIn(hidden,rendered)
+        worker.opener.open.assert_called_once()
+        return output.call_args.args[0],error
+
+    def test_http_diagnostics_only_recognize_the_fixed_sampling_error(self):
+        raw=json.dumps({'error':'采样时间无效，未写入采集结果','Authorization':'synthetic-private-response-value'}).encode()
+        message,error=self.run_http_failure(raw)
+        self.assertEqual(message,'采集器请求失败（阶段：结果回填；HTTP 400；分类：采样时间无效）')
+        self.assertEqual(error.worker_category,'invalid_sampling_time')
+
+    def test_http_diagnostics_unknown_oversized_invalid_or_secret_responses_stay_safe(self):
+        raw_values=[b'not-json Authorization SELECT * FROM',
+            json.dumps({'error':'synthetic-private-response-value'}).encode(),
+            json.dumps({'error':'采样时间无效，未写入采集结果synthetic-private-response-value'}).encode(),
+            json.dumps({'error':'unknown','padding':'x'*9000}).encode()]
+        for raw in raw_values:
+            with self.subTest(size=len(raw)):
+                message,error=self.run_http_failure(raw)
+                self.assertEqual(message,'采集器请求失败（阶段：结果回填；HTTP 400；分类：未分类HTTP错误）')
+                self.assertLessEqual(error.fp.tell(),8193)
+        message,error=self.run_http_failure(b'{}','/unknown?token=synthetic-private-response-value')
+        self.assertEqual(message,'采集器请求失败（阶段：请求；HTTP 400；分类：未分类HTTP错误）')
+
+    def test_http_diagnostics_do_not_trust_exception_attributes_as_log_content(self):
+        error=f2_worker.HTTPError('synthetic-private-url',400,'synthetic-private-message',{},None)
+        error.worker_stage='synthetic-private-stage';error.worker_category=['synthetic-private-category'];error.code='synthetic-private-code'
+        self.assertEqual(f2_worker.http_error_message(error),'采集器请求失败（阶段：请求；HTTP ?；分类：未分类HTTP错误）')
 
     def test_resolved_profile_is_bound_to_identity_and_cannot_be_replaced_by_report(self):
         worker=self.worker();worker.profiles=f2_worker.ProfileIndex({JOB['douyin_id']:{PROFILE_URL}})

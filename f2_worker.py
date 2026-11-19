@@ -89,6 +89,29 @@ ERRORS={'LoginRequired':'抖音登录已失效，请在独立采集浏览器中�
         'CollectorStartupFailed':'采集程序未返回有效报告，请检查运行环境和浏览器',
         'CollectorTimedOut':'抖音采集超时，请检查采集器网络'}
 BLOCKED_ERRORS={'LoginRequired','SearchNeedsVerification','CollectorStartupFailed'}
+HTTP_STAGES={'/api/collection/heartbeat':'心跳','/api/collection/next':'领取任务','/api/collection/result':'结果回填'}
+HTTP_CATEGORIES={'invalid_sampling_time':'采样时间无效','unknown':'未分类HTTP错误'}
+
+
+def http_error_context(error,route):
+    error.worker_stage=HTTP_STAGES.get(route,'请求')
+    error.worker_category='unknown'
+    try:
+        raw=error.read(8193)
+        if isinstance(raw,bytes) and len(raw)<=8192:
+            value=json.loads(raw)
+            if isinstance(value,dict) and value.get('error')=='采样时间无效，未写入采集结果':
+                error.worker_category='invalid_sampling_time'
+    except Exception:pass
+
+
+def http_error_message(error):
+    stage=getattr(error,'worker_stage','请求')
+    if stage not in HTTP_STAGES.values():stage='请求'
+    key=getattr(error,'worker_category','unknown')
+    category=HTTP_CATEGORIES.get(key,HTTP_CATEGORIES['unknown']) if isinstance(key,str) else HTTP_CATEGORIES['unknown']
+    code=error.code if type(error.code) is int and 100<=error.code<=599 else '?'
+    return f'采集器请求失败（阶段：{stage}；HTTP {code}；分类：{category}）'
 
 class NoRedirects(HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -163,7 +186,11 @@ class Worker:
     def request(self,route,body=None):
         req=Request(self.origin+route,data=json.dumps(body).encode() if body is not None else None,
             headers={'Content-Type':'application/json','X-Worker-Token':self.token,'X-Collection-Engine':'f2'})
-        with self.opener.open(req,timeout=15) as response:return json.load(response)
+        try:
+            with self.opener.open(req,timeout=15) as response:return json.load(response)
+        except HTTPError as error:
+            http_error_context(error,route)
+            raise
 
     def heartbeat(self,status):
         command=self.request('/api/collection/heartbeat',{
@@ -235,7 +262,9 @@ class Worker:
         except (OSError,ValueError):row={'status':'failed','error':'CollectorStartupFailed'}
         body=result_body(active,row)
         # Capture once, before delivery retries. Server receipt time may be late.
-        body['sampled_at']=datetime.now(timezone.utc).isoformat(timespec='microseconds')
+        # A missing profile never started a query, so no sampling event exists.
+        if not body.get('profile_required'):
+            body['sampled_at']=datetime.now(timezone.utc).isoformat(timespec='microseconds')
         if not body.get('profile_required'):self.failures=self.failures+1 if body.get('error') else 0
         if not body.get('profile_required') and self.failures>=3:
             body.update(blocked=True,error=body['error']+'；连续3次失败，队列暂停，请检查后继续')
@@ -248,24 +277,26 @@ class Worker:
         try:
             ok=result.get('ok') is True
             ignored=result.get('ignored') is True
+            needs_profile=body.get('profile_required') is True
             count=body.get('count')
-            valid_count=type(count) is int and 0 <= count <= 10000000 and not body.get('error')
+            valid_count=type(count) is int and 0 <= count <= 10000000 and not body.get('error') and not needs_profile
             raw=body.get('source_url')
             parsed=urlsplit(raw.strip()) if isinstance(raw,str) else None
             source=('https://www.douyin.com'+parsed.path.rstrip('/') if parsed and
                     parsed.scheme=='https' and parsed.netloc=='www.douyin.com' and
                     re.fullmatch(r'/user/[A-Za-z0-9_-]{5,200}/?',parsed.path) else None)
             sampled_at=None
-            if isinstance(body.get('sampled_at'),str):
+            if not needs_profile and isinstance(body.get('sampled_at'),str):
                 try:
                     sampled=datetime.fromisoformat(body['sampled_at'].replace('Z','+00:00'))
                     if sampled.tzinfo:sampled_at=sampled.astimezone(timezone.utc).isoformat(timespec='microseconds')
                 except ValueError:pass
-            persisted=bool(ok and not ignored and valid_count and source)
+            persisted=bool(not needs_profile and ok and not ignored and valid_count and source)
             receipt={'account_id':job['account_id'],'douyin_id':job['douyin_id'],
-                'sampled_at':sampled_at,'deliveredAt':datetime.now(timezone.utc).isoformat(timespec='microseconds'),
+                'deliveredAt':datetime.now(timezone.utc).isoformat(timespec='microseconds'),
                 'server_origin':self.origin,'ok':ok,'duplicate':result.get('duplicate') is True,
-                'ignored':ignored,'persisted':persisted,'status':'success' if persisted else 'failed'}
+                'ignored':ignored,'persisted':persisted,'status':'needs_profile' if needs_profile else 'success' if persisted else 'failed'}
+            if not needs_profile:receipt['sampled_at']=sampled_at
             if valid_count:receipt['count']=count
             if source and valid_count:receipt['source_url']=source
             with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',prefix='delivery-',suffix='.json',
@@ -325,7 +356,7 @@ class Worker:
             try:
                 result=self.poll(once=once)
             except Exception as error:
-                message=f'采集器请求失败（HTTP {error.code}）' if isinstance(error,HTTPError) else '采集器未完成本次处理，请检查运行环境及本机服务'
+                message=http_error_message(error) if isinstance(error,HTTPError) else '采集器未完成本次处理，请检查运行环境及本机服务'
                 if message!=last_error:print(message,file=sys.stderr,flush=True)
                 last_error=message
                 if once:return 1
