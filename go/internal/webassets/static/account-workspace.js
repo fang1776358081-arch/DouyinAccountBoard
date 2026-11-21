@@ -5,8 +5,8 @@ function compactAccountRow(account,index){
  const inline=(field,content)=>window.AccountInline?AccountInline.cell(account,field,content):content;
  const status=`<span class="badge ${account.status==='正常'?'good':abnormal(account)?'warn':''}">${esc(account.status||'待确认')}</span>`;
  const phoneTitle=typeof accountDeviceDisplay==='function'?accountDeviceDisplay(account,data):account.phone_device_name||'登录手机待确认';
- const unit=(data.device_workflow?.units||[]).find(row=>String(row.id)===String(account.device_access?.last_unit_id));
- const device=(data.phone_devices?.devices||[]).find(row=>row.id===(unit?.device_id||account.phone_device_id));
+ const unit=index?.unitsById.get(String(account.device_access?.last_unit_id));
+ const device=index?.devicesById.get(unit?.device_id||account.phone_device_id);
  const phone=device&&typeof deviceOfficeText==='function'?deviceOfficeText(device,data)+' · '+(deviceNumber(device)?deviceNumber(device)+'号手机':'手机编号待核对')+(unit&&!unit.active?' · 旧机':unit?.generation>1?' · 第'+unit.generation+'台':''):phoneTitle;
  const note=esc(String(account.note||'').slice(0,80)||'填写备注');
  return `<tr><td data-column="select"><input type="checkbox" data-select="${esc(account.id)}" ${selected.has(account.id)?'checked':''} aria-label="选择账号 ${esc(account.name)}"></td>
@@ -30,13 +30,13 @@ function renderAccountFilterSummary(accounts){
  if(preset)conditions.push({id:'lifecyclePreset',label:'注册进度快捷筛选',value:({all:'全部大号',ready:'满30天待注册',registered:'已注册小号',young:'未满30天',missing:'待补日期',blocked:'暂无法注册',unknown:'类型待确认'})[preset]||preset});
  const advancedCount=conditions.filter(item=>accountAdvancedFields.has(item.id)||item.id==='lifecyclePreset'||window.AccountPilot?.advanced.has(item.id)).length;
  if($('accountAdvancedCount'))$('accountAdvancedCount').textContent=advancedCount?'（已选 '+advancedCount+' 项）':'';
- host.innerHTML=`<span class="account-filter-count">筛选结果 <strong>${accounts.length}</strong> 个账号</span>`+(conditions.length?conditions.map(item=>`<button type="button" class="account-filter-chip" data-clear-account-filter="${esc(item.id)}" aria-label="清除${esc(item.label)}筛选">${esc(item.label)}：${esc(item.value)} <span aria-hidden="true">×</span></button>`).join(''):'<span class="account-filter-empty">未附加筛选条件</span>');
+ const count=window.AccountPaged?.active()?AccountPaged.total():accounts.length;host.innerHTML=`<span class="account-filter-count">筛选结果 <strong>${count}</strong> 个账号</span>`+(conditions.length?conditions.map(item=>`<button type="button" class="account-filter-chip" data-clear-account-filter="${esc(item.id)}" aria-label="清除${esc(item.label)}筛选">${esc(item.label)}：${esc(item.value)} <span aria-hidden="true">×</span></button>`).join(''):'<span class="account-filter-empty">未附加筛选条件</span>');
 }
 function clearAccountFilter(id){
  if(id==='lifecyclePreset'){activeLifecyclePreset='';['accountType','ageFilter','lifecycleFilter'].forEach(key=>$(key).value='');}
  else if([...accountFilterFields,...(window.AccountPilot?.enabled()?window.AccountPilot.fields:[])].some(([key])=>key===id)){$(id).value='';if(['accountType','ageFilter','lifecycleFilter'].includes(id))activeLifecyclePreset='';}
  else return;
- render();
+ if(window.AccountPaged?.intent())AccountPaged.schedule();else render();
 }
 
 // Office-three UI pilot. Source facts stay in authorized memory; only enum
@@ -46,7 +46,7 @@ if(typeof window!=='undefined')window.AccountPilot=(()=>{
  const advanced=new Set(fields.map(([id])=>id));
  const sourceKeys={accountResponsible:'responsible',accountUsage:'usage',accountViolation:'violation',accountBusinessType:'business_type'};
  const safeEnums=['status','published','accountType','ageFilter','lifecycleFilter','verificationFilter'];
- let activeKey='',lastScope='',lastUser='',lastPage='',wasActive=false,headerHTML=null,filterTimer=null,sourceFlight=null,sourceGeneration=0,sourcePhase='idle',sourceMessage='',sourceSignature='',sourceRows=new Map(),lastBoard=null,restoredScroll=null;
+ let activeKey='',lastScope='',lastUser='',lastPage='',wasActive=false,headerHTML=null,filterTimer=null,sourceFlight=null,sourceGeneration=0,sourcePhase='idle',sourceMessage='',sourceSignature='',sourceRows=new Map(),restoredScroll=null;
  const memories=new Map();
  const board=()=>typeof data==='undefined'?null:data;
  const enabled=()=>typeof page!=='undefined'&&page==='accounts'&&typeof activeOffice!=='undefined'&&activeOffice==='three'&&!!board()?.user;
@@ -77,11 +77,16 @@ if(typeof window!=='undefined')window.AccountPilot=(()=>{
   if(!saved)return;
   for(const [id,value]of Object.entries(saved.fields||{})){const node=field(id);if(node)node.value=value;}
   if(field('accountAdvancedFilters'))field('accountAdvancedFilters').open=saved.advanced===true;
-  if(Array.isArray(saved.selected)){const allowed=new Set(officeAccounts(board().accounts).map(row=>String(row.id)));selected.clear();for(const id of saved.selected)if(allowed.has(String(id)))selected.add(String(id));}
+  if(Array.isArray(saved.selected)){
+   const allowed=new Set(window.AccountPaged?.active()?AccountPaged.matchingIds():officeAccounts(board().accounts).map(row=>String(row.id)));
+   selected.clear();
+   for(const id of saved.selected)if(allowed.has(String(id)))selected.add(String(id));
+  }
   activeLifecyclePreset=saved.preset||'';
   const base=[...accountSearchFields,'computer','status','published','accountType','ageFilter','lifecycleFilter','loginPhoneFilter','verificationFilter'];
   accountPageSignature=JSON.stringify([activeOffice,board().date,activeLifecyclePreset,...base.map(id=>field(id)?.value||''),...signature()]);
   accountPageIndex=saved.page;restoredScroll=saved;
+  window.AccountPaged?.restorePage(saved.page);
  }
  function showSourceState(){const node=field('accountPilotSourcesState');if(node){node.textContent=sourceMessage;node.hidden=!sourceMessage;node.dataset.phase=sourcePhase;}}
  function fillSourceFilters(){
@@ -92,7 +97,7 @@ if(typeof window!=='undefined')window.AccountPilot=(()=>{
   }
   showSourceState();
  }
- function clearSources(){sourceGeneration++;sourceFlight?.token.abort?.abort();sourceFlight=null;sourceRows=new Map();sourceSignature='';sourcePhase='idle';sourceMessage='';lastBoard=null;}
+ function clearSources(){sourceGeneration++;sourceFlight?.token.abort?.abort();sourceFlight=null;sourceRows=new Map();sourceSignature='';sourcePhase='idle';sourceMessage='';}
  async function loadSources(force=false){
   if(!enabled())return false;const key=scopeKey();if(sourceFlight?.key===key)return sourceFlight.promise;
   if(!force&&sourceSignature===key&&sourcePhase==='ready')return true;
@@ -102,8 +107,8 @@ if(typeof window!=='undefined')window.AccountPilot=(()=>{
     if(token.generation!==sourceGeneration||scopeKey()!==key||!enabled())return false;
     if(result?.office_id!=='three'||!Array.isArray(result.sources)||typeof result.available!=='boolean')throw Error('来源字段响应不完整');
     if(!result.available){sourceRows=new Map();sourceSignature=key;sourcePhase='unavailable';sourceMessage='表格来源字段尚未启用；原账号资料仍可正常查看和编辑。';}
-    else{const ids=new Set(officeAccounts(board().accounts).map(row=>String(row.id))),next=new Map();for(const row of result.sources){if(row?.account_id==null||!ids.has(String(row.account_id)))continue;next.set(String(row.account_id),{responsible:text(row.responsible),usage:text(row.usage),violation:text(row.violation),business_type:text(row.business_type),storefront:text(row.storefront),source_data:row.source_data&&typeof row.source_data==='object'?row.source_data:null,revision:row.revision});}sourceRows=next;sourceSignature=key;sourcePhase='ready';sourceMessage='';}
-    fillSourceFilters();if(!window.AccountInline?.hasDraft()&&!document.querySelector('dialog[open]')?.open)render();return true;
+    else{const next=new Map();for(const row of result.sources){if(row?.account_id==null)continue;next.set(String(row.account_id),{responsible:text(row.responsible),usage:text(row.usage),violation:text(row.violation),business_type:text(row.business_type),storefront:text(row.storefront),source_data:row.source_data&&typeof row.source_data==='object'?row.source_data:null,revision:row.revision});}sourceRows=next;sourceSignature=key;sourcePhase='ready';sourceMessage='';}
+    fillSourceFilters();if(!window.AccountPaged?.active()&&signature().some(Boolean)&&!window.AccountInline?.hasDraft()&&!document.querySelector('dialog[open]')?.open)render();return true;
    }catch(error){if(token.generation!==sourceGeneration||scopeKey()!==key)return false;sourcePhase='error';sourceMessage='表格来源字段读取失败；不猜测负责人或业务分类。可点“重试来源字段”。';fillSourceFilters();return false;}
    finally{clearTimeout(timer);if(sourceFlight?.token===token)sourceFlight=null;}
   })();sourceFlight={key,token,promise};return promise;
@@ -111,7 +116,7 @@ if(typeof window!=='undefined')window.AccountPilot=(()=>{
  function mount(){
   if(document.querySelector('[data-account-pilot-filters]'))return;
   const more=document.querySelector('.account-more-fields');if(!more?.append)return;
-  for(const [id,label]of fields){const wrapper=document.createElement('label');wrapper.className='field-search account-pilot-filter';wrapper.dataset.accountPilotFilters='';wrapper.innerHTML=escape(label)+'<select id="'+id+'" aria-label="'+escape(label)+'"><option value="">全部'+escape(label)+'</option></select>';more.append(wrapper);const node=field(id);if(node)node.onchange=()=>{cancelFilter();render();};}
+  for(const [id,label]of fields){const wrapper=document.createElement('label');wrapper.className='field-search account-pilot-filter';wrapper.dataset.accountPilotFilters='';wrapper.innerHTML=escape(label)+'<select id="'+id+'" aria-label="'+escape(label)+'"><option value="">全部'+escape(label)+'</option></select>';more.append(wrapper);const node=field(id);if(node)node.onchange=()=>{cancelFilter();if(window.AccountPaged?.intent())AccountPaged.schedule();else render();};}
   const status=document.createElement('p');status.id='accountPilotSourcesState';status.className='account-pilot-source-state';status.setAttribute('role','status');field('accountActiveFilters')?.after(status);
   const retry=document.createElement('button');retry.type='button';retry.id='accountPilotSourcesRetry';retry.className='text-button account-pilot-source-retry';retry.textContent='重试来源字段';retry.onclick=()=>loadSources(true);status.after(retry);
  }
@@ -135,30 +140,40 @@ if(typeof window!=='undefined')window.AccountPilot=(()=>{
    const actions=document.querySelector('.header-actions');if(actions)actions.hidden=false;
    const retry=field('accountPilotSourcesRetry');if(retry)retry.hidden=sourcePhase!=='error';
    wasActive=true;remember();
-   if(lastBoard!==board()){lastBoard=board();void loadSources(true);}else if(sourcePhase==='idle')void loadSources();
+   if(sourcePhase==='idle')void loadSources();
    if(restoredScroll){const saved=restoredScroll;restoredScroll=null;const scroll=document.querySelector('#accountsView > .account-scroll');if(scroll){scroll.scrollLeft=Number(saved.left)||0;scroll.scrollTop=Number(saved.top)||0;}window.scrollTo?.(Number(saved.x)||0,Number(saved.y)||0);}
    void window.AccountInline?.restoreSuspended?.();
-  }else if(headerHTML!==null&&head){head.innerHTML=headerHTML;headerHTML=null;const all=field('selectAll');if(all)all.onchange=()=>{filtered().forEach(account=>all.checked?selected.add(account.id):selected.delete(account.id));render();};}
+  }else if(headerHTML!==null&&head){head.innerHTML=headerHTML;headerHTML=null;const all=field('selectAll');if(all)all.onchange=selectAllMatching;}
   for(const node of document.querySelectorAll('.account-pilot-filter,.account-pilot-source-state,.account-pilot-source-retry'))node.hidden=!active||(node.id==='accountPilotSourcesState'&&!sourceMessage)||(node.id==='accountPilotSourcesRetry'&&sourcePhase!=='error');
   lastPage=typeof page==='undefined'?'':page;
  }
  function row(account,index){return compactAccountRow(account,index);}
  function openDetail(id,trigger){
   if(typeof page==='undefined'||page!=='accounts'||!board()?.user||window.AccountInline?.hasDraft()||window.CardInline?.hasDraft()||window.DeviceInline?.hasDraft())return false;
+  if(window.AccountPaged?.active()&&!accountScopeReady())return false;
   const account=officeAccounts(board().accounts).find(row=>String(row.id)===String(id));if(!account)return false;
   let dialog=field('accountPilotDetailDialog');if(!dialog){dialog=document.createElement('dialog');dialog.id='accountPilotDetailDialog';dialog.className='account-pilot-detail';dialog.setAttribute('aria-labelledby','accountPilotDetailTitle');document.body.append(dialog);}
   const source=enabled()?sourceFor(account):null,host=board().computers.find(row=>row.id===account.computer_id),saved=uiState();
   const collectionReason=collectionSubmitReason();
   const sourceFields=source?[['负责人',source.responsible],['使用情况',source.usage],['违规状态',source.violation],['业务类型',source.business_type],['门头',source.storefront],['来源手机编号（参考）',text(source.source_data?.source_phone_number)],['小号说明（来源）',text(source.source_data?.auxiliary_note)],['原表状态',text(source.source_data?.original_status)],['来源轮次',text(source.source_data?.source_round)]]:[];
-  dialog.innerHTML=`<div class="dialog-head"><div><small>账号详情</small><h2 id="accountPilotDetailTitle">${escape(account.name)}</h2></div><button id="accountPilotDetailClose" type="button" class="text-button">关闭</button></div><div class="account-pilot-detail-body"><section><h3>账号身份</h3><p>抖音号：${escape(account.douyin_id||'待补充')}</p><p>状态：${escape(account.status)}</p><p>登录手机：${escape(typeof accountDeviceDisplay==='function'?accountDeviceDisplay(account,board()):account.phone_device_name||'待确认')}</p><p>登记电脑：${escape(host?.name||'待确认')} · 位置 ${escape(account.slot??'未分配')}</p><p>实际发布：${actualPublishingText(account)}</p><p>${escape(board().date)}：${account.published?'已记录发布':'未记录发布'}</p></section><section><h3>账号类型 / 注册进度</h3>${lifecycleDetails(account)}<p>注册手机号：${escape(account.registration_phone||'未填写')}</p></section><section><h3>稳定与改密</h3><p>稳定：${escape(account.card_stability||'待确认')} · 改密：${escape(account.password_state||'待确认')}</p>${verificationMarkup(account)}</section><section><h3>表格来源资料</h3>${source?sourceFields.map(([label,value])=>'<p>'+escape(label)+'：'+escape(value||'来源未提供')+'</p>').join(''):'<p>来源资料尚未登记或暂不可用，不根据其他关系推断。</p>'}<p class="permission-note">表格来源与人工备注分别保留；来源手机编号不代表登录关系。</p></section><section><h3>完整备注</h3><p class="account-detail-note">${escape(account.note||'未填写')}</p></section><section><h3>公开作品数量 / 采集记录</h3><p>${escape(account.work_count??'尚未采集')} · ${escape(account.last_collected||'无成功记录')}</p><p>${escape(account.collection_state||'尚无采集记录')}</p>${account.collection_error?'<p class="error-text">'+escape(account.collection_error)+'</p>':''}<p id="accountPilotCollectionReason" class="permission-note">${escape(collectionReason||'手动采集公开作品数量')}</p><button id="accountPilotCollect" type="button" class="button" data-collect="${escape(account.id)}" ${collectionReason?'disabled':''} title="${escape(collectionReason)}">采集该账号</button><p id="accountPilotCollectionFeedback" role="status"></p></section></div><div class="account-pilot-detail-footer"><button type="button" class="button" data-edit="${escape(account.id)}" id="accountPilotDetailEdit" ${['account_manage','account_status','account_progress','device_manage'].some(hasPermission)?'':'hidden'}>编辑完整资料</button>${board().device_workflow?.enabled?`<button type="button" class="button" data-workflow-account="${escape(account.id)}" id="accountPilotDeviceWorkflow">登录恢复 / 处理记录</button>`:''}<a class="button" href="/workspace.html?account=${encodeURIComponent(account.id)}${enabled()?'&office=three':''}">关联资料 / 历史</a></div>`;
-  const close=()=>dialog.close();field('accountPilotDetailClose').onclick=close;field('accountPilotDetailEdit').onclick=close;const workflow=field('accountPilotDeviceWorkflow');if(workflow)workflow.onclick=close;
+  dialog.innerHTML=`<div class="dialog-head"><div><small>账号详情</small><h2 id="accountPilotDetailTitle">${escape(account.name)}</h2></div><button id="accountPilotDetailClose" type="button" class="text-button">关闭</button></div><div class="account-pilot-detail-body"><section><h3>账号身份</h3><p>抖音号：${escape(account.douyin_id||'待补充')}</p><p>状态：${escape(account.status)}</p><p>登录手机：${escape(typeof accountDeviceDisplay==='function'?accountDeviceDisplay(account,board()):account.phone_device_name||'待确认')}</p><p>登记电脑：${escape(host?.name||'待确认')} · 位置 ${escape(account.slot??'未分配')}</p><p>实际发布：${actualPublishingText(account)}</p><p>${escape(board().date)}：${account.published?'已记录发布':'未记录发布'}</p></section><section><h3>账号类型 / 注册进度</h3>${lifecycleDetails(account)}<p>注册手机号：${escape(account.registration_phone||'未填写')}</p></section><section><h3>稳定与改密</h3><p>稳定：${escape(account.card_stability||'待确认')} · 改密：${escape(account.password_state||'待确认')}</p>${verificationMarkup(account)}</section><section><h3>表格来源资料</h3>${source?sourceFields.map(([label,value])=>'<p>'+escape(label)+'：'+escape(value||'来源未提供')+'</p>').join(''):'<p>来源资料尚未登记或暂不可用，不根据其他关系推断。</p>'}<p class="permission-note">表格来源与人工备注分别保留；来源手机编号不代表登录关系。</p></section><section><h3>完整备注</h3><p class="account-detail-note">${escape(account.note||'未填写')}</p></section><section><h3>公开作品数量 / 采集记录</h3><p>${escape(account.work_count??'尚未采集')} · ${escape(account.last_collected||'无成功记录')}</p><p>${escape(account.collection_state||'尚无采集记录')}</p>${account.collection_error?'<p class="error-text">'+escape(account.collection_error)+'</p>':''}<p id="accountPilotCollectionReason" class="permission-note">${escape(collectionReason||'手动采集公开作品数量')}</p><button id="accountPilotCollect" type="button" class="button" data-collect="${escape(account.id)}" ${collectionReason?'disabled':''} title="${escape(collectionReason)}">采集该账号</button><p id="accountPilotCollectionFeedback" role="status"></p></section></div><div class="account-pilot-detail-footer"><button type="button" class="button" data-edit="${escape(account.id)}" id="accountPilotDetailEdit" ${['account_manage','account_status','account_progress','device_manage'].some(hasPermission)?'':'hidden'}>编辑完整资料</button>${(board().device_workflow?.enabled||window.AccountPaged?.active())?`<button type="button" class="button" ${window.AccountPaged?.active()?'':'data-workflow-account="'+escape(account.id)+'"'} id="accountPilotDeviceWorkflow">登录恢复 / 处理记录</button>`:''}<a class="button" href="/workspace.html?account=${encodeURIComponent(account.id)}${enabled()?'&office=three':''}">关联资料 / 历史</a></div>`;
+  const close=()=>dialog.close();
+  field('accountPilotDetailClose').onclick=close;
+  field('accountPilotDetailEdit').onclick=close;
+  const workflow=field('accountPilotDeviceWorkflow');
+  if(workflow)workflow.onclick=async()=>{
+   close();
+   if(!window.AccountPaged?.active())return;
+   if(!await AccountPaged.ensureLegacy())return;
+   if(!window.DeviceWorkflow?.enabled())return toast('设备流程暂不可用');
+   window.DeviceWorkflow.openAccount(account.id);
+  };
   dialog.onclose=()=>{const scroll=document.querySelector('#accountsView > .account-scroll');if(scroll){scroll.scrollLeft=saved.left;scroll.scrollTop=saved.top;}window.scrollTo?.(saved.x,saved.y);trigger?.focus?.({preventScroll:true});window.boardLiveSync?.poke();};
   dialog.showModal();void window.refreshBoardCollection?.();return true;
  }
  document.addEventListener('click',event=>{if(event.target.closest?.('[data-office]'))remember();const button=event.target.closest?.('[data-account-pilot-detail]');if(button){event.preventDefault();openDetail(button.dataset.accountPilotDetail,button);}},true);
- document.addEventListener('board-ready',()=>{if(enabled()){lastBoard=board();void loadSources(true);}});
  window.addEventListener?.('pagehide',remember);
- return Object.freeze({fields,advanced,enabled,matches,signature,beforeRender,afterRender,remember,row,openDetail,scheduleFilter,cancelFilter,resetFilters,loadSources,refreshSources:()=>loadSources(true),getState:()=>({phase:sourcePhase,sourceCount:sourceRows.size,scope:activeKey})});
+ return Object.freeze({fields,advanced,enabled,matches,signature,beforeRender,afterRender,remember,row,openDetail,scheduleFilter,cancelFilter,resetFilters,clearSources,loadSources,refreshSources:()=>loadSources(true),getState:()=>({phase:sourcePhase,sourceCount:sourceRows.size,scope:activeKey})});
 })();
 document.addEventListener('click',event=>{const button=event.target.closest('[data-clear-account-filter]');if(button)clearAccountFilter(button.dataset.clearAccountFilter);});
 

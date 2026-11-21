@@ -250,6 +250,7 @@ func mountPostgres(lifecycle context.Context, mux *http.ServeMux, db *sql.DB, or
 	mux.HandleFunc("GET /api/account/inline", accounts.Inline)
 	mux.HandleFunc("GET /api/nurture/image", accounts.NurtureImage)
 	mux.HandleFunc("GET /api/board", boardRead.Board)
+	mux.HandleFunc("GET /api/accounts", boardRead.Accounts)
 	mux.HandleFunc("GET /api/ban-impact", boardRead.BanImpact)
 	mux.HandleFunc("GET /api/record-versions", boardRead.RecordVersions)
 	mux.HandleFunc("GET /api/workspace/history", boardRead.History)

@@ -56,6 +56,7 @@ window.AccountInline=(()=>{
  function otherWritePending(){return typeof boardWrites!=='undefined'&&boardWrites>0||typeof dailyViewLoading!=='undefined'&&!!dailyViewLoading||typeof dailyRequests!=='undefined'&&dailyRequests.size>0||typeof pendingRequestIds!=='undefined'&&pendingRequestIds.size>0;}
  async function begin(id,field){
   if(draft){announceBlocked();return false;}if(!allowed(field))return false;
+  if(window.AccountPaged?.active()&&!accountScopeReady())return false;
   const board=state(),row=board?.accounts?.find(item=>String(item.id)===String(id));
   if(!row||otherWritePending()||document.querySelector?.('dialog[open]')?.open){hint('页面正在处理其他操作，请稍后再编辑。');return false;}
   composing=false;const entry=draft={id:String(id),field,value:String(row[field]||''),phase:'loading',baseline:null,payload:null,sent:false,running:null,opened:board,userId:String(board.user?.id),readAbort:null};interaction();paint();
@@ -87,7 +88,9 @@ window.AccountInline=(()=>{
   if(fresh.account[entry.field]!==expected){entry.current=fresh;entry.phase='conflict';entry.message='本次修改已保存过，但随后有人修改了此项。草稿已保留；当前内容：'+fresh.account[entry.field];paint(true);return false;}
   confirmed.set(confirmedKey(entry.userId,entry.id,entry.field),fresh.account[entry.field]);
   if(pilotActive()&&['name','note'].includes(entry.field))undoEntry=entry.undoing?null:{key:pilotKey(),id:entry.id,field:entry.field,before:entry.baseline.account[entry.field],after:fresh.account[entry.field],version:fresh.record_version,until:Date.now()+30000};
-  leave(entry.undoing?'已撤销刚才的'+labels[entry.field]+'修改。':entry.field==='status'?'已保存账号状态，正在更新筛选结果和统计…':'已保存'+labels[entry.field]+'，正在同步其他修改。');return true;
+  leave(entry.undoing?'已撤销刚才的'+labels[entry.field]+'修改。':entry.field==='status'?'已保存账号状态，正在更新筛选结果和统计…':'已保存'+labels[entry.field]+'，正在同步其他修改。');
+  if(window.AccountPaged?.active())void AccountPaged.load();
+  return true;
  }
  async function transmit(entry,attempt){
   const options={fixedPayload:true,applyVersions:false,trackWrite:false};let result;

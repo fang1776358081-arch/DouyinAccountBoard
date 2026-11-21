@@ -243,3 +243,4 @@
 .accounts-console .office-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
 .accounts-console .office-tab { min-height: 34px; min-width: 0; padding: 6px 10px; flex: 0 1 auto; }
 .accounts-console .office-tab strong { font-size: 12px; gap: 8px; }
+.account-page-loading #accountActiveFilters::after,.account-page-pending #accountActiveFilters::after{content:'正在更新…';margin-left:auto;color:var(--muted,#64748b);font-size:.86rem}.account-page-loading #accountsView{cursor:progress}.account-page-loading #accountPagination button{pointer-events:none}

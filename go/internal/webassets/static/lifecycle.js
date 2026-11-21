@@ -25,11 +25,11 @@ function lifecycleEdit(a){
 function toggleLifecycleEdit(){const small=$('editType').value==='小号';$('parentField').hidden=!small;$('auxField').hidden=small;if(!small)$('editParent').value='';}
 function lifecyclePayload(){return {account_type:$('editType').value,parent_account_id:$('editParent').value,registered_on:$('editRegistered').value,auxiliary_state:$('editAux').value,lifecycle_note:$('editLifecycleNote').value,registration_phone:$('editPhone').value};}
 document.addEventListener('DOMContentLoaded',()=>{
- document.addEventListener('click',event=>{const preset=event.target.closest('[data-lifecycle-preset]');if(!preset)return;const key=preset.dataset.lifecyclePreset;$('accountType').value=key==='unknown'?'待确认':'大号';$('ageFilter').value=key==='young'?'young':'';$('lifecycleFilter').value=({ready:'满30天未注册',registered:'已注册辅助账号',blocked:'暂无法注册'})[key]||'';activeLifecyclePreset=key;render();});
+ document.addEventListener('click',event=>{const preset=event.target.closest('[data-lifecycle-preset]');if(!preset)return;const key=preset.dataset.lifecyclePreset;$('accountType').value=key==='unknown'?'待确认':'大号';$('ageFilter').value=key==='young'?'young':'';$('lifecycleFilter').value=({ready:'满30天未注册',registered:'已注册辅助账号',blocked:'暂无法注册'})[key]||'';activeLifecyclePreset=key;if(window.AccountPaged?.intent())AccountPaged.schedule();else render();});
  $('accountsBody').addEventListener('change',async event=>{const select=event.target.closest('[data-aux-status]');if(!select)return;select.disabled=true;const requestKey='lifecycle:'+select.dataset.auxStatus;try{await api('/api/lifecycle-status',{id:select.dataset.auxStatus,auxiliary_state:select.value,request_id:claimRequestId(requestKey)});settleRequestId(requestKey);await load();toast('注册状态已保存，日期保留');}catch(error){settleRequestId(requestKey,error);toast(error.message);await load();}});
  $('editType').onchange=toggleLifecycleEdit;
- $('newAccount').onclick=()=>edit('');
- ['accountType','lifecycleFilter','ageFilter'].forEach(id=>$(id).onchange=()=>{activeLifecyclePreset='';render();});
+ $('newAccount').onclick=async()=>{if(!accountScopeReady()||window.AccountPaged?.active()&&!await AccountPaged.ensureLegacy())return;edit('');};
+ ['accountType','lifecycleFilter','ageFilter'].forEach(id=>$(id).onchange=()=>{activeLifecyclePreset='';if(window.AccountPaged?.intent())AccountPaged.schedule();else render();});
  $('lifecycleFilter').innerHTML='<option value="">全部注册进度</option>'+lifecycleStages.map(s=>'<option>'+s+'</option>').join('');
 });
 let activeLifecyclePreset='';

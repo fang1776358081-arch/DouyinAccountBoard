@@ -119,6 +119,11 @@ func TestBoardSyntheticPostgreSQL(t *testing.T) {
 	if compact["device_workflow"].(row)["access"] != nil || compact["record_versions"].(row)["account:go-east-account"] != token {
 		t.Fatal("compaction lost versions or left attached duplicate access")
 	}
+	invoke(h.Accounts, "/api/accounts?office_id=three", "employee", 403)
+	accountPage := invoke(h.Accounts, "/api/accounts?office_id=three&date="+day, "owner", 200)
+	if accountPage["office_id"] != "three" || accountPage["total"] != float64(0) || accountPage["page_size"] != float64(accountsPageSize) || len(accountPage["accounts"].([]any)) != 0 {
+		t.Fatal("office-three account page contract changed")
+	}
 	versions = invoke(h.RecordVersions, "/api/record-versions?keys=account:go-east-account,account:go-west-account,daily:go-east-account:2026-11-08", "employee", 200)["record_versions"].(row)
 	if len(versions) != 3 || versions["account:go-east-account"] != token || versions["account:go-west-account"] != nil || versions["daily:go-east-account:2026-11-08"] == nil {
 		t.Fatal("targeted version results changed")

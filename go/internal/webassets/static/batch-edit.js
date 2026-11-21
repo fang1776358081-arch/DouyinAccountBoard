@@ -6,15 +6,17 @@ function batchVisible(kind){
  if(kind==='cards')return filteredCards();if(kind==='devices')return filteredPhones();if(kind==='verification')return batchNurtureRows;
  return filtered().filter(a=>kind!=='daily'||a.computer_id!=='unassigned');
 }
-function batchCurrentPage(kind){if(kind==='verification')return batchNurturePageRows;const rows=batchVisible(kind);return kind==='accounts'&&typeof accountPageRows==='function'?accountPageRows(rows):kind==='cards'?rows.slice((cardPageIndex-1)*cardPageSize,cardPageIndex*cardPageSize):kind==='devices'?rows.slice((devicePageIndex-1)*devicePageSize,devicePageIndex*devicePageSize):rows;}
+const pagedBatchAccounts=kind=>kind==='accounts'&&globalThis.AccountPaged?.active();
+function batchMatchingIds(kind,rows){return pagedBatchAccounts(kind)?AccountPaged.matchingIds():rows.map(row=>String(row.id));}
+function batchCurrentPage(kind){if(kind==='verification')return batchNurturePageRows;const rows=batchVisible(kind);return kind==='accounts'&&!pagedBatchAccounts(kind)&&typeof accountPageRows==='function'?accountPageRows(rows):kind==='cards'?rows.slice((cardPageIndex-1)*cardPageSize,cardPageIndex*cardPageSize):kind==='devices'?rows.slice((devicePageIndex-1)*devicePageSize,devicePageIndex*devicePageSize):rows;}
 function batchBar(kind){
- const selection=batchSelection(kind),visible=batchVisible(kind),ids=new Set(visible.map(r=>String(r.id)));for(const id of selection)if(!ids.has(id))selection.delete(id);
+ const selection=batchSelection(kind),visible=batchVisible(kind),ids=new Set(batchMatchingIds(kind,visible));for(const id of selection)if(!ids.has(id))selection.delete(id);
  const title={accounts:'账号',cards:'手机卡',devices:'手机设备',daily:'发布账号',verification:'养号账号'}[kind];
  const actions=kind==='daily'?[['daily','批量记录发布'],['accounts','批量账号状态'],['verification','批量核对']]:kind==='accounts'?[['accounts','批量修改'],['verification','批量核对']]:[[kind,'批量修改']];
  if(['daily','verification'].includes(kind)&&!selection.size)return visible.length?'<button type="button" class="text-button" data-batch-all="daily" data-batch-page="yes">选中本页</button>':'';
  if(kind==='cards')return selection.size?`<span class="card-selection-summary">已选 <strong>${selection.size}</strong> 张手机卡 <small>本页 ${batchCurrentPage(kind).length} 张 / 筛选共 ${visible.length} 张</small></span><button type="button" class="text-button" data-batch-all="cards">选中全部筛选结果（${visible.length}）</button><button type="button" class="button" data-batch-open="cards" data-batch-source="cards" ${!batchFields('cards').some(f=>batchAllowed(f[3]))?'disabled title="需要手机卡资料管理权限"':''}>批量修改</button>${batchAllowed('card_manage')?`<button type="button" class="button" data-employee-card-link-open ${selection.size>200?'disabled title="每批最多关联200张，请缩小选择范围"':''}>关联员工</button>`:''}<button type="button" class="text-button" data-batch-clear="cards">取消选择</button>`:'';
  if(kind==='devices')return `<span>已选 ${selection.size} 台手机</span><button type="button" class="text-button" data-batch-all="devices" data-batch-page="yes">选中本页</button>`+(selection.size?`<button type="button" class="text-button" data-batch-all="devices">选中全部筛选结果（${visible.length}）</button><button type="button" class="button" data-batch-open="devices" data-batch-source="devices" ${!batchFields('devices').some(f=>batchAllowed(f[3]))?'disabled':''}>批量修改</button><button type="button" class="text-button" data-batch-clear="devices">取消选择</button>`:'');
- if(kind==='accounts')return `<span class="account-selection-summary">已选 ${selection.size} 条账号 · 本页 ${batchCurrentPage(kind).length} 条 / 筛选共 ${visible.length} 条</span><button type="button" class="text-button" data-batch-all="accounts" data-batch-page="yes">选中本页</button>`+(selection.size?`<button type="button" class="text-button" data-batch-all="accounts">选中全部筛选结果（${visible.length}）</button>${actions.map(([action,label])=>`<button type="button" class="button" data-batch-open="${action}" data-batch-source="accounts" ${!batchFields(action).some(f=>batchAllowed(f[3]))?'disabled':''}>${label}</button>`).join('')}<button type="button" class="text-button" data-batch-clear="accounts">取消选择</button>`:'');
+ if(kind==='accounts')return `<span class="account-selection-summary">已选 ${selection.size} 条账号 · 本页 ${batchCurrentPage(kind).length} 条 / 筛选共 ${ids.size} 条</span><button type="button" class="text-button" data-batch-all="accounts" data-batch-page="yes">选中本页</button>`+(selection.size?`<button type="button" class="text-button" data-batch-all="accounts">选中全部筛选结果（${ids.size}）</button>${actions.map(([action,label])=>`<button type="button" class="button" data-batch-open="${action}" data-batch-source="accounts" ${!batchFields(action).some(f=>batchAllowed(f[3]))?'disabled':''}>${label}</button>`).join('')}<button type="button" class="text-button" data-batch-clear="accounts">取消选择</button>`:'');
  return `<span>已选 ${selection.size} 条${title}${kind==='accounts'?` · 本页 ${batchCurrentPage(kind).length} 条 / 筛选共 ${visible.length} 条`:''}</span><button type="button" class="button" data-batch-all="${kind}" data-batch-page="yes">选中本页</button><button type="button" class="button" data-batch-all="${kind}">选中全部筛选结果（${visible.length}）</button><button type="button" class="text-button" data-batch-clear="${kind}">取消选择</button>${actions.map(([action,label])=>`<button type="button" class="button" data-batch-open="${action}" data-batch-source="${kind}" ${!selection.size||!batchFields(action).some(f=>batchAllowed(f[3]))?'disabled':''}>${label}</button>`).join('')}`;
 }
 function renderBatchControls(){
@@ -56,10 +58,17 @@ function openBatchEditor(kind,source=kind){
  }catch(error){settleRequestId(requestKey,error);$('batchEditError').textContent=error.message;}finally{button.disabled=false;}};
 }
 document.addEventListener('change',event=>{const kind=event.target.dataset.batchPick;if(!kind)return;const selected=batchSelection(kind),id=String(event.target.value);event.target.checked?selected.add(id):selected.delete(id);renderBatchControls();});
-document.addEventListener('click',event=>{
+document.addEventListener('click',async event=>{
  const all=event.target.closest('[data-batch-all]'),clear=event.target.closest('[data-batch-clear]'),open=event.target.closest('[data-batch-open]');
+ const source=open?.dataset.batchSource||all?.dataset.batchAll||clear?.dataset.batchClear;
+ if(source==='accounts'&&typeof accountScopeReady==='function'&&!accountScopeReady())return;
+ if(open&&pagedBatchAccounts(source)){
+  const ids=[...batchSelection(source)];
+  if(!await AccountPaged.ensureLegacy())return;
+  if(ids.length!==batchSelection(source).size||ids.some(id=>!batchSelection(source).has(id)))return toast('可操作范围已变化，请重新勾选');
+ }
  if(open)return openBatchEditor(open.dataset.batchOpen,open.dataset.batchSource);
- if(all){const kind=all.dataset.batchAll;for(const row of all.dataset.batchPage?batchCurrentPage(kind):batchVisible(kind))batchSelection(kind).add(String(row.id));}
+ if(all){const kind=all.dataset.batchAll,ids=all.dataset.batchPage?batchCurrentPage(kind).map(row=>String(row.id)):batchMatchingIds(kind,batchVisible(kind));for(const id of ids)batchSelection(kind).add(id);}
  if(clear)batchSelection(clear.dataset.batchClear).clear();
  if(all||clear){if(typeof page!=='undefined')render();else document.querySelectorAll('[data-batch-pick]').forEach(input=>input.checked=batchSelection(input.dataset.batchPick).has(String(input.value)));renderBatchControls();}
 });

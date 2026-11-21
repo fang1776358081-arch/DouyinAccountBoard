@@ -7,7 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"douyinboard/internal/recordwire"
 	"douyinboard/internal/session"
@@ -58,6 +60,14 @@ func (s Service) Flags(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "日期格式不正确", "")
 		return
 	}
+	id := ""
+	if ids, present := r.URL.Query()["id"]; present {
+		if len(ids) != 1 || !validFlagID(ids[0]) {
+			writeError(w, http.StatusBadRequest, "账号编号不正确", "")
+			return
+		}
+		id = ids[0]
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -76,9 +86,13 @@ func (s Service) Flags(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "版本读取范围不正确", "")
 		return
 	}
-	out, err := loadFlags(ctx, tx, actor, day, mode == "1")
+	out, err := loadFlags(ctx, tx, actor, day, id, mode == "1")
 	if err != nil {
 		databaseError(w, err, "")
+		return
+	}
+	if id != "" && len(out.Published) == 0 {
+		writeError(w, http.StatusForbidden, "无权访问此资料", "")
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -88,24 +102,33 @@ func (s Service) Flags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func loadFlags(ctx context.Context, tx *sql.Tx, actor session.User, day string, versions bool) (flagsResponse, error) {
-	const query = `
+func validFlagID(id string) bool {
+	return id != "" && utf8.ValidString(id) && utf8.RuneCountInString(id) <= 500 && !strings.ContainsRune(id, 0)
+}
+
+func loadFlags(ctx context.Context, tx *sql.Tx, actor session.User, day, id string, versions bool) (flagsResponse, error) {
+	query := `
 		SELECT a.id, ao.office_id, d.published
 		FROM board_candidate.accounts AS a
 		LEFT JOIN board_candidate.account_offices AS ao ON ao.account_id = a.id
 		LEFT JOIN board_candidate.daily AS d ON d.account_id = a.id AND d.day = $1
-		WHERE $2 OR EXISTS (
+		WHERE ($2 OR EXISTS (
 			SELECT 1 FROM board_candidate.user_office_grants AS g
 			JOIN board_candidate.offices AS o ON o.id = g.office_id AND o.active = 1
 			WHERE g.user_id = $3 AND g.office_id = ao.office_id
-		)`
+		))`
+	args := []any{day, actor.Global(), actor.ID}
+	if id != "" {
+		query += " AND a.id=$4"
+		args = append(args, id)
+	}
 	out := flagsResponse{Date: day, Published: make(map[string]bool)}
 	var recordVersions map[string]*string
 	if versions {
 		recordVersions = make(map[string]*string)
 		out.RecordVersions = &recordVersions
 	}
-	rows, err := tx.QueryContext(ctx, query, day, actor.Global(), actor.ID)
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return out, err
 	}

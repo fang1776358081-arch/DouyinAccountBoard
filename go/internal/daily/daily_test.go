@@ -107,6 +107,22 @@ func TestDailySyntheticPostgreSQL(t *testing.T) {
 	if !old.Published["go-east-account"] || old.RecordVersions != nil {
 		t.Fatal("historical date or optional versions response changed")
 	}
+	target := getFlags("employee", "date=2026-11-09&versions=1&id=go-east-account", http.StatusOK)
+	targetKey := dailyKey("go-east-account", "2026-11-09")
+	if !reflect.DeepEqual(target.Published, map[string]bool{"go-east-account": false}) ||
+		target.RecordVersions == nil || !reflect.DeepEqual(*target.RecordVersions, map[string]*string{targetKey: versions[targetKey]}) {
+		t.Fatal("targeted flags should contain exactly the requested record and its version")
+	}
+	missing := getFlags("employee", "date=2026-11-09&versions=1&id=go-east-missing", http.StatusOK)
+	missingKey := dailyKey("go-east-missing", "2026-11-09")
+	if !reflect.DeepEqual(missing.Published, map[string]bool{"go-east-missing": false}) ||
+		missing.RecordVersions == nil || !reflect.DeepEqual(*missing.RecordVersions, map[string]*string{missingKey: nil}) {
+		t.Fatal("targeted flags should preserve an absent daily version as null")
+	}
+	getFlags("employee", "id=go-west-account", http.StatusForbidden)
+	getFlags("employee", "id=absent-account", http.StatusForbidden)
+	getFlags("employee", "id=", http.StatusBadRequest)
+	getFlags("employee", "id=go-east-account&id=go-west-account", http.StatusBadRequest)
 	owner := getFlags("owner", "date=2026-11-09", http.StatusOK)
 	if !owner.Published["go-west-account"] || len(owner.Published) < 5 {
 		t.Fatal("global access lost visible flags")

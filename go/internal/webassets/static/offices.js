@@ -27,7 +27,7 @@ function officeFilterResources(resources,kind){
  if(kind==='devices')return resources.filter(resource=>deviceInOffice(resource));
  const accounts=kind==='computers'?officeAccounts():[];
  return resources.filter(resource=>{
-  if(kind==='computers'&&resource.id==='unassigned')return accounts.some(a=>a.computer_id==='unassigned');
+  if(kind==='computers'&&resource.id==='unassigned')return !!window.AccountPaged?.active()||accounts.some(a=>a.computer_id==='unassigned');
   if(data.user?.scope_mode)return Array.isArray(resource.office_ids)&&(activeOffice==='pending'?resource.office_ids.length===0:resource.office_ids.includes(activeOffice));
   return accounts.some(a=>a.computer_id===resource.id)||(data.publishing_layout?.cells||[]).some(cell=>cell.computer_id===resource.id&&publishingCellOffice(cell)===activeOffice);
  });
@@ -40,19 +40,35 @@ function renderComputerFilter(){
 function officeName(){return officeDefinitions.find(o=>o.id===activeOffice)?.name||'全部办公室';}
 function renderOffices(){
  const scoped=!!data.user?.scope_mode;
+ const paged=!!window.AccountPaged?.active();
  officeDefinitions=scoped?[{id:'all',name:'全部授权办公室',range:'当前账号可访问的资料'},...(data.offices||[]).map(o=>({id:o.id,name:o.name,range:'明确分配的资料'})),...(data.user.scope_mode==='all'?[{id:'pending',name:'待分配',range:'尚未分配办公室'}]:[])]:legacyOfficeDefinitions;
  if(!officeDefinitions.some(o=>o.id===activeOffice))activeOffice='all';
  $('officeWorkspace').hidden=!['accounts','board','phones'].includes(page);
  if($('officeWorkspace').hidden)return;
- $('officeTabs').innerHTML=officeDefinitions.map(o=>`<button type="button" data-office="${esc(o.id)}" aria-pressed="${activeOffice===o.id}" class="office-tab ${activeOffice===o.id?'active':''}"><strong>${esc(o.name)}<span>${page==='phones'?(data.phone_devices?.devices||[]).filter(device=>deviceInOffice(device,o.id)).length:data.accounts.filter(a=>o.id==='all'||accountOffice(a)===o.id).length}</span></strong><small>${page==='phones'?'手机设备数量':esc(o.range)}</small></button>`).join('');
+ $('officeTabs').innerHTML=officeDefinitions.map(o=>{
+  const count=paged?(o.id==='three'?AccountPaged.total():null):page==='phones'?(data.phone_devices?.devices||[]).filter(device=>deviceInOffice(device,o.id)).length:data.accounts.filter(a=>o.id==='all'||accountOffice(a)===o.id).length;
+  return `<button type="button" data-office="${esc(o.id)}" aria-pressed="${activeOffice===o.id}" class="office-tab ${activeOffice===o.id?'active':''}"><strong>${esc(o.name)}${count===null?'':`<span>${count}</span>`}</strong><small>${page==='phones'?'手机设备数量':esc(o.range)}</small></button>`;
+ }).join('');
  $('officeHint').textContent=scoped?'按资料明确分配的办公室筛选；调整登录手机不会改变办公室归属。':'办公室一、二按原手机编号划分；办公室三设备独立编号。账号管理与发布看板同步切换，未分配电脑的账号可在账号管理查看。';
 }
 document.addEventListener('click',event=>{
  const button=event.target.closest('[data-office]');
  if(!button)return;
+ if(window.AccountInline?.hasDraft()){AccountInline.announceBlocked();return;}
+ if(window.AccountPaged?.active()&&button.dataset.office!=='three'){
+  const url=new URL(location.href);url.searchParams.set('office',button.dataset.office);
+  location.assign(url.href);return;
+ }
  activeOffice=button.dataset.office;
  activeLifecyclePreset='';
  if(page==='phones'){devicePageIndex=1;if(typeof batchSelection==='function')batchSelection('devices').clear();}
  clearAccountSearch();['query','computer','status','published','accountType','lifecycleFilter','ageFilter','loginPhoneFilter'].forEach(id=>$(id).value='');
- selected.clear();render();
+ window.AccountPilot?.resetFilters();
+ selected.clear();
+ if(window.AccountPaged?.eligible()){
+  const url=new URL(location.href);
+  url.searchParams.set('page','accounts');url.searchParams.set('office','three');
+  history.replaceState(null,'',url.pathname+url.search);
+  void AccountPaged.load(1);
+ }else render();
 });

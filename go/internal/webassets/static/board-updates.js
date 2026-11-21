@@ -108,6 +108,14 @@ async function catchUpBoard(options={}){
   const payload=await response.json();
   if(!isCurrent())return result(boardSyncBlocked()?'deferred':'waiting');
   if(!payload||!Number.isInteger(payload.cursor)||payload.cursor<requested||payload.reload!==true&&!Array.isArray(payload.changes))throw boardSyncFailure(undefined,'更新响应格式不正确');
+  if(globalThis.AccountPaged?.active()){
+   if(payload.reload===true||payload.changes.some(change=>boardChangeMode(change,state)!=='skip')){
+    if(payload.changes?.some(change=>change.entity?.startsWith('account-source:')))await globalThis.AccountPilot?.refreshSources?.();
+    return reload();
+   }
+   state.cursor=payload.cursor;
+   return result('idle');
+  }
   if(payload.reload===true||payload.changes.some(change=>boardChangeMode(change,state)==='reload'))return reload();
   const changes=payload.changes.filter(change=>boardChangeMode(change,state)==='patch');
   if(payload.changes.some(change=>boardChangeMode(change,state)==='source'||change.entity.startsWith('account:'))){

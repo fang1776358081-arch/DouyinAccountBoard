@@ -37,16 +37,22 @@ function mergeDailyVersions(versions,before){if(!data)return;const accepted={};f
 function rememberDaily(id,day,published){if(!data||data.date!==day||$('date').value!==day)return;const row=data.accounts.find(account=>String(account.id)===String(id));if(row){row.published=published;globalThis.requestSerial=++requestSerial;}}
 async function readDailyState(id,day,retries=1){
  if(dailyViewLoading)throw Error('页面正在刷新，保存结果待确认，请稍后点击原记录重试核对');
- const keys=['account:'+id,dailyKey(id,day)],before=Object.fromEntries(keys.map(key=>[key,dailyVersion(key)])),cursor=data?.cursor,view=dailyViewGeneration,opened=data;
- // A full board read supplies the flag and versions from one read transaction.
- // It is a recovery path, not a second read on every successful daily write.
- const board=await api('/api/board?date='+encodeURIComponent(day)+'&version_scope=day'+(page==='accounts'?'&compact=accounts':''),undefined,{applyVersions:false});
- const row=board.accounts?.find(account=>String(account.id)===String(id));
- if(board.date!==day||!row||!board.record_versions||![true,false,0,1].includes(row.published))throw Error('发布记录尚未核对成功，请刷新后重试');
- const versions=Object.fromEntries(keys.map(key=>[key,board.record_versions[key]??null])),key=dailyKey(id,day);
- const viewChanged=view!==dailyViewGeneration||opened!==data,stale=viewChanged||data?.cursor!==cursor||dailyVersion(key)!==before[key]&&dailyVersion(key)!==versions[key];
+ const key=dailyKey(id,day),before=dailyVersion(key);
+ const cursor=data?.cursor,view=dailyViewGeneration,opened=data;
+ const paged=window.AccountPaged?.active();
+ const date=encodeURIComponent(day);
+ const path=paged?'/api/daily-flags?date='+date+'&versions=1&id='+encodeURIComponent(id)
+  :'/api/board?date='+date+'&version_scope=day'+(page==='accounts'?'&compact=accounts':'');
+ const snapshot=await api(path,undefined,{applyVersions:false});
+ const flag=paged?snapshot.published?.[id]:snapshot.accounts?.find(account=>String(account.id)===String(id))?.published;
+ if(snapshot.date!==day||!snapshot.record_versions||![true,false,0,1].includes(flag)||paged&&!Object.hasOwn(snapshot.record_versions,key)){
+  throw Error('发布记录尚未核对成功，请刷新后重试');
+ }
+ const version=snapshot.record_versions[key]??null;
+ const viewChanged=view!==dailyViewGeneration||opened!==data;
+ const stale=viewChanged||data?.cursor!==cursor||dailyVersion(key)!==before&&dailyVersion(key)!==version;
  if(stale){
-  if(data?.date!==day||$('date').value!==day)return {id,date:day,published:!!row.published,stale:true};
+  if(data?.date!==day||$('date').value!==day)return {id,date:day,published:!!flag,stale:true};
   // A newer page/date load owns the view. Do not start another recovery read
   // whose completion could invalidate that load before its response arrives.
   if(viewChanged)throw Error('页面正在刷新，保存结果待确认，请稍后点击原记录重试核对');
@@ -55,8 +61,8 @@ async function readDailyState(id,day,retries=1){
  }
  // Account fields were not refreshed: never attach a foreign account token to
  // their old contents or advance an open editor's captured account version.
- mergeDailyVersions({[key]:versions[key]},before);rememberDaily(id,day,!!row.published);writeBoardCache();
- return {id,date:day,published:!!row.published};
+ mergeDailyVersions({[key]:version},{[key]:before});rememberDaily(id,day,!!flag);writeBoardCache();
+ return {id,date:day,published:!!flag};
 }
 async function confirmDailyResult(entry,result){
  const daily=result?.daily,key=dailyKey(entry.id,entry.day),incoming=result?._record_versions;
@@ -99,7 +105,7 @@ async function toggleDaily(id){
    if(!entry.sent||error.status!==undefined){dailyRequests.delete(key);pendingRequestIds.delete(key);}
    if(error.status===409&&entry.view===dailyViewGeneration&&entry.opened===data){try{await readDailyState(id,day);}catch(readError){}}
    toast(error.status===undefined&&entry.sent?'保存结果待确认，请点击原记录重试核对':error.message||'保存失败，请重试');
-  }finally{entry.running=null;render();syncDailyButtons();}
+  }finally{entry.running=null;render();syncDailyButtons();if(window.AccountPaged?.active()&&!dailyRequests.has(key))void AccountPaged.load();}
  })();
  syncDailyButtons();return entry.running;
 }
@@ -114,6 +120,9 @@ async function load(allowWorkflowReload=false,syncOptions=null){
  if(window.EmployeeCardLink?.hasDraft()){window.EmployeeCardLink.announceBlocked();return false;}
  if(window.AccountInline?.hasDraft()){window.AccountInline.announceBlocked();return false;}
  const background=syncOptions?.background===true;
+ if(background&&window.AccountPaged?.active())return AccountPaged.load(undefined,syncOptions);
+ if(!background&&window.AccountPaged?.eligible()&&!window.DeviceWorkflow?.isOpen())return AccountPaged.load();
+ if(!background&&window.AccountPaged?.active())return AccountPaged.ensureLegacy();
  if(window.DeviceWorkflow?.isOpen()&&allowWorkflowReload!==true||background&&typeof boardSyncBlocked==='function'&&boardSyncBlocked())return false;
  const opened=data,epoch=boardMutationEpoch,view=++dailyViewGeneration;dailyViewLoading=view;const serial=++requestSerial;globalThis.requestSerial=requestSerial;
  if(!background)window.CardPageUI?.state('loading',!!data);
@@ -127,17 +136,29 @@ async function load(allowWorkflowReload=false,syncOptions=null){
 }
 function boardStorage(){if(typeof localStorage==='undefined')return null;return localStorage;}
 function readBoardCache(){const storage=boardStorage();if(!storage)return null;try{const parsed=JSON.parse(storage.getItem('douyin-board-view')||'null');if(!parsed||typeof parsed!=='object'||parsed.userId==null||!parsed.board||!Number.isInteger(parsed.board.cursor)||parsed.board.user?.id==null||!parsed.board.device_workflow||typeof parsed.board.device_workflow!=='object')return null;if(String(parsed.board.user.id)!==String(parsed.userId))return null;return parsed;}catch(error){return null;}}
-function writeBoardCache(){const storage=boardStorage();if(!storage||!data||data.user?.id==null||!Number.isInteger(data.cursor))return;try{storage.setItem('douyin-board-view',JSON.stringify({userId:data.user.id,board:data}));}catch(error){}}
+function writeBoardCache(){const storage=boardStorage();if(window.AccountPaged?.active()||!storage||!data||data.user?.id==null||!Number.isInteger(data.cursor))return;try{storage.setItem('douyin-board-view',JSON.stringify({userId:data.user.id,board:data}));}catch(error){}}
 function clearBoardCache(){const storage=boardStorage();if(!storage)return;try{storage.removeItem('douyin-board-view');}catch(error){}}
+function clearPagedAccountView(){
+ data=null;globalThis.data=null;currentUser=null;selected.clear();clearBoardCache();
+ window.AccountInline?.clearSuspended?.();
+ window.AccountPilot?.clearSources?.();
+ for(const id of ['accountsBody','stats','scope','selectedCount','batchAccountsBar','accountPagination','currentUser','accountActiveFilters','accountInlineHint','lifecycleSummary','officeTabs','officeHint'])if($(id))$(id).replaceChildren();
+ $('accountWorkspace').hidden=true;
+ for(const dialog of document.querySelectorAll('dialog[open]'))dialog.close();
+ const detail=$('accountPilotDetailDialog');
+ if(detail){detail.onclose=null;detail.replaceChildren();}
+ window.WorkbenchNav?.update({user:null});
+}
 function showBoard(next){window.AccountInline?.acceptBoard();data=next;globalThis.data=data;renderVerificationFilter();$('date').value=data.date;$('loadError').hidden=true;const statusValue=$('status').value;$('status').innerHTML='<option value="">全部账号状态</option>'+data.statuses.map(s=>`<option>${esc(s)}</option>`).join('');$('status').value=statusValue;const bulkValue=$('bulkStatus').value;$('bulkStatus').innerHTML=data.statuses.map(s=>`<option>${esc(s)}</option>`).join('');if(bulkValue)$('bulkStatus').value=bulkValue;render();if(typeof CustomEvent!=='undefined')document.dispatchEvent(new CustomEvent('board-ready'));writeBoardCache();}
 async function loadPublished(day){if(window.DeviceInline?.hasDraft()){$('date').value=data?.date||'';window.DeviceInline.announceBlocked();return false;}if(window.CardInline?.hasDraft()){$('date').value=data?.date||'';window.CardInline.announceBlocked();return false;}if(window.EmployeeCardLink?.hasDraft()){$('date').value=data?.date||'';window.EmployeeCardLink.announceBlocked();return false;}if(window.AccountInline?.hasDraft()){$('date').value=data?.date||'';window.AccountInline.announceBlocked();return false;}const view=++dailyViewGeneration;dailyViewLoading=view;const serial=++requestSerial;globalThis.requestSerial=requestSerial;try{const result=await api('/api/daily-flags?date='+encodeURIComponent(day)+'&versions=1',undefined,{applyVersions:false});if(serial!==requestSerial||!data||window.DeviceInline?.hasDraft()||window.CardInline?.hasDraft())return;data.date=result.date;$('date').value=result.date;const versions=Object.fromEntries(Object.entries(result.record_versions||{}).filter(([key])=>key.startsWith('daily:')));data.record_versions={...data.record_versions,...versions};const flags=result.published||{};for(const account of data.accounts)account.published=!!flags[account.id];render();writeBoardCache();}catch(e){$('loadError').textContent='加载失败：'+e.message;$('loadError').hidden=false;}finally{if(dailyViewLoading===view)dailyViewLoading=0;}}
 async function openBoard(){
  if(typeof prepareWorkspaceTodoShortcut==='function'&&prepareWorkspaceTodoShortcut()){await load();return;}
- const cached=readBoardCache();if(!cached){clearBoardCache();await load();return;}let me=null;try{const response=await fetch('/api/auth/me');if(response.status===401){clearBoardCache();location.replace(location.search==='?office=three'?'/login.html?next='+encodeURIComponent('/?office=three'):'/login.html');return;}if(response.ok)me=(await response.json()).user||null;}catch(error){}if(!me||me.id==null||String(cached.userId)!==String(me.id)){clearBoardCache();await load();return;}showBoard(cached.board);
+ if(window.AccountPaged?.intent()){await load();return;}
+ const cached=readBoardCache();if(!cached){clearBoardCache();await load();return;}let me=null;try{const response=await fetch('/api/auth/me');if(response.status===401){clearBoardCache();location.replace(location.search==='?office=three'?'/login.html?next='+encodeURIComponent('/?office=three'):'/login.html');return;}if(response.ok)me=(await response.json()).user||null;}catch(error){}const scopeKey=window.AccountPaged?.scopeKey;if(!me||me.id==null||String(cached.userId)!==String(me.id)||scopeKey&&scopeKey(cached.board.user)!==scopeKey(me)){clearBoardCache();await load();return;}showBoard(cached.board);
  try{if(window.boardLiveSync)await window.boardLiveSync.poke();else if(typeof catchUpBoard==='function')await catchUpBoard();else await load();}
  catch(error){if(error.status!==401){if(window.LiveSync)window.LiveSync.status('boardSyncState',{phase:'error',forbidden:error.status===403});else if($('boardSyncState'))$('boardSyncState').textContent='同步暂时中断，请稍后重试';}}
 }
-function filtered(){return officeAccounts(pageAccounts()).filter(a=>phoneDeviceMatches(a)&&lifecyclePresetMatches(a)&&accountSearchMatches(a)&&verificationMatches(a)&&(!window.AccountPilot||window.AccountPilot.matches(a))&&(!$('computer').value||a.computer_id===$('computer').value)&&(!$('status').value||a.status===$('status').value)&&(!$('accountType').value||a.account_type===$('accountType').value)&&(!$('ageFilter').value||(a.account_type==='大号'&&($('ageFilter').value==='missing'?!a.registered_on:a.registered_on&&($('ageFilter').value==='mature'?a.days_remaining===0:a.days_remaining>0))))&&(!$('lifecycleFilter').value||a.lifecycle===$('lifecycleFilter').value)&&(!$('published').value||(!!a.published===($('published').value==='yes'))));}
+function filtered(){if(window.AccountPaged?.active())return data.accounts||[];return officeAccounts(pageAccounts()).filter(a=>phoneDeviceMatches(a)&&lifecyclePresetMatches(a)&&accountSearchMatches(a)&&verificationMatches(a)&&(!window.AccountPilot||window.AccountPilot.matches(a))&&(!$('computer').value||a.computer_id===$('computer').value)&&(!$('status').value||a.status===$('status').value)&&(!$('accountType').value||a.account_type===$('accountType').value)&&(!$('ageFilter').value||(a.account_type==='大号'&&($('ageFilter').value==='missing'?!a.registered_on:a.registered_on&&($('ageFilter').value==='mature'?a.days_remaining===0:a.days_remaining>0))))&&(!$('lifecycleFilter').value||a.lifecycle===$('lifecycleFilter').value)&&(!$('published').value||(!!a.published===($('published').value==='yes'))));}
 let activeRenderIndex=null,accountPageIndex=1,accountPageSignature='';
 const accountPageSize=50;
 function renderPositionKey(computer,slot){return JSON.stringify([typeof computer,computer,typeof slot,slot]);}
@@ -255,6 +276,7 @@ function renderPublishAccountCell(account,computer,slot,detailKey,expanded,canAd
 
 function accountPageRows(rows){return rows.slice((accountPageIndex-1)*accountPageSize,accountPageIndex*accountPageSize);}
 function prepareAccountPage(accounts){
+ if(window.AccountPaged?.active())return AccountPaged.prepare(accounts);
  const fields=[...accountSearchFields,'computer','status','published','accountType','ageFilter','lifecycleFilter','loginPhoneFilter','verificationFilter'];
  const signature=JSON.stringify([activeOffice,data.date,typeof activeLifecyclePreset==='undefined'?'':activeLifecyclePreset,...fields.map(id=>$(id)?.value||''),...(window.AccountPilot?.signature()||[])]);
  if(signature!==accountPageSignature){accountPageSignature=signature;accountPageIndex=1;}
@@ -266,12 +288,13 @@ function prepareAccountPage(accounts){
  return accountPageRows(accounts);
 }
 function render(){if(window.DeviceInline?.hasDraft())return;if(window.CardInline?.hasDraft())return;if(window.EmployeeCardLink?.hasDraft())return;if(window.AccountInline?.hasDraft())return;if(!data)return;const previous=activeRenderIndex;activeRenderIndex=createRenderIndex();try{window.AccountPilot?.beforeRender();renderPageContent(activeRenderIndex);window.WorkbenchNav?.update({user:data.user,page,office:page==='cards'?$('cardOfficeFilter').value:activeOffice});window.AccountPilot?.afterRender();window.AccountSheet?.afterRender();window.BanImpact?.sync(data,page);}finally{activeRenderIndex=previous;}}
-function renderPageContent(index){if(typeof activateAccountConsole==='function')activateAccountConsole(page==='accounts');window.CardPageUI?.activate(page==='cards');document.body.classList.toggle('phones-console',page==='phones');document.body.classList.toggle('board-fit',page==='board');renderBackup();renderOffices();const cardsPage=page==='cards',phonesPage=page==='phones';$('cardsWorkspace').hidden=!cardsPage;$('phonesWorkspace').hidden=!phonesPage;$('accountWorkspace').hidden=cardsPage||phonesPage;$('collectionBar').hidden=cardsPage||phonesPage;document.querySelector('.header-actions').hidden=cardsPage||phonesPage;if(cardsPage||phonesPage){$('matrixHead').innerHTML='';$('matrixBody').innerHTML='';$('accountsBody').innerHTML='';$('lifecycleSummary').hidden=true;phonesPage?renderPhones():renderCards();applyPermissions();return;}renderComputerFilter();renderPhoneFilter();lifecycleSummary();const officeScope=officeAccounts();const accounts=filtered().filter(a=>page!=='board'||a.computer_id!=='unassigned'),visibleIds=new Set(accounts.map(a=>a.id));for(const id of selected)if(!visibleIds.has(id))selected.delete(id);if(typeof renderAccountFilterSummary==='function')renderAccountFilterSummary(accounts);const done=accounts.filter(a=>a.published).length;const layoutCells=page==='board'?filteredPublishingCells(accounts):[],layoutActive=page==='board'&&publishingEnabled();const computerFilter=!!$('computer').value,hostIds=new Set((layoutActive?layoutCells:accounts).map(row=>row.computer_id));const hosts=data.computers.filter(c=>c.id!=='unassigned'&&(!computerFilter||c.id===$('computer').value)&&hostIds.has(c.id));
- $('stats').innerHTML=[['负责电脑',hosts.length,'本次筛选中的主机','▣'],['账号总数',accounts.length,layoutActive?'已匹配到发布格子的账号':'已导入的账号资料','◎'],['当天已发',done,accounts.length?Math.round(done/accounts.length*100)+'% 完成':'暂无账号','✓'],['当天未发',accounts.length-done,'待人工勾选记录','◷']].map((s,i)=>`<div class="stat ${i===2?'highlight':''}"><span class="stat-symbol">${s[3]}</span><div class="stat-label">${s[0]}</div><strong>${s[1]}</strong><small>${s[2]}</small></div>`).join('');
+function renderPageContent(index){if(typeof activateAccountConsole==='function')activateAccountConsole(page==='accounts');window.CardPageUI?.activate(page==='cards');document.body.classList.toggle('phones-console',page==='phones');document.body.classList.toggle('board-fit',page==='board');renderBackup();renderOffices();const cardsPage=page==='cards',phonesPage=page==='phones',paged=!!window.AccountPaged?.active();$('cardsWorkspace').hidden=!cardsPage;$('phonesWorkspace').hidden=!phonesPage;$('accountWorkspace').hidden=cardsPage||phonesPage;$('collectionBar').hidden=cardsPage||phonesPage||paged&&!hasPermission('collection_manage');document.querySelector('.header-actions').hidden=cardsPage||phonesPage;if(cardsPage||phonesPage){$('matrixHead').innerHTML='';$('matrixBody').innerHTML='';$('accountsBody').innerHTML='';$('lifecycleSummary').hidden=true;phonesPage?renderPhones():renderCards();applyPermissions();return;}renderComputerFilter();renderPhoneFilter();if(paged)$('lifecycleSummary').hidden=true;else lifecycleSummary();const officeScope=officeAccounts();const accounts=filtered().filter(a=>page!=='board'||a.computer_id!=='unassigned'),visibleIds=new Set(accounts.map(a=>a.id));if(!paged)for(const id of selected)if(!visibleIds.has(id))selected.delete(id);if(typeof renderAccountFilterSummary==='function')renderAccountFilterSummary(accounts);const done=paged?AccountPaged.publishedTotal():accounts.filter(a=>a.published).length;const layoutCells=page==='board'?filteredPublishingCells(accounts):[],layoutActive=page==='board'&&publishingEnabled();const computerFilter=!!$('computer').value,hostIds=new Set((layoutActive?layoutCells:accounts).map(row=>row.computer_id));const hosts=data.computers.filter(c=>c.id!=='unassigned'&&(!computerFilter||c.id===$('computer').value)&&hostIds.has(c.id));
+ const resultTotal=paged?AccountPaged.total():accounts.length,computerTotal=paged?AccountPaged.computerTotal():hosts.length;
+ $('stats').innerHTML=[['负责电脑',computerTotal,'本次筛选中的主机','▣'],['账号总数',resultTotal,layoutActive?'已匹配到发布格子的账号':'已导入的账号资料','◎'],['当天已发',done,resultTotal?Math.round(done/resultTotal*100)+'% 完成':'暂无账号','✓'],['当天未发',resultTotal-done,'待人工勾选记录','◷']].map((s,i)=>`<div class="stat ${i===2?'highlight':''}"><span class="stat-symbol">${s[3]}</span><div class="stat-label">${s[0]}</div><strong>${s[1]}</strong><small>${s[2]}</small></div>`).join('');
  renderBoardCollectionInfo();
  const pendingCount=layoutCells.filter(cell=>cell.label?.trim()&&cell.account_id===null&&!cell.manual_link).length;
- const resultCount=layoutActive?`${accounts.length} 格已关联 · ${pendingCount} 格待关联`:`${accounts.length} 个账号`;
- $('scope').textContent=`${officeName()} · ${data.date===data.today?'今天':data.date} · ${hosts.length} 台电脑 · ${resultCount}`;
+ const resultCount=layoutActive?`${accounts.length} 格已关联 · ${pendingCount} 格待关联`:`${resultTotal} 个账号`;
+ $('scope').textContent=`${officeName()} · ${data.date===data.today?'今天':data.date} · ${computerTotal} 台电脑 · ${resultCount}`;
  if(page==='board'){
  renderDailyMatrix(hosts,accounts,officeScope,layoutCells,layoutActive,index);
  $('accountsBody').innerHTML='';
@@ -280,14 +303,79 @@ function renderPageContent(index){if(typeof activateAccountConsole==='function')
  const accountRows=prepareAccountPage(accounts);
  $('accountsBody').innerHTML=accountRows.map(account=>compactAccountRow(account,index)).join('')||'<tr><td colspan="8" class="empty-result">没有符合条件的账号，试试清除筛选条件。</td></tr>';
  }
- $('selectedCount').textContent=`已选择 ${selected.size} 个账号`;$('selectAll').checked=accounts.length>0&&accounts.every(a=>selected.has(a.id));$('selectAll').indeterminate=selected.size>0&&!$('selectAll').checked;
+ const selectable=paged?AccountPaged.matchingIds():accounts.map(a=>String(a.id));
+ if(paged){const allowed=new Set(selectable);for(const id of selected)if(!allowed.has(id))selected.delete(id);}
+ $('selectedCount').textContent=`已选择 ${selected.size} 个账号`;$('selectAll').checked=selectable.length>0&&selectable.every(id=>selected.has(id));$('selectAll').indeterminate=selected.size>0&&!$('selectAll').checked;
  document.querySelector('#boardView .footnote').textContent=layoutActive?'发布位置来自工作进度表。待关联格确认账号后即可记录发布。':'点击未发或已发切换当天记录。';$('boardView').hidden=page!=='board';$('accountsView').hidden=page!=='accounts';$('title').textContent=page==='board'?'每日发布看板':'账号资料';$('breadcrumb').textContent=page==='board'?'每日发布':'账号资料';$('panelTitle').textContent=page==='board'?'主机发布矩阵':'账号清单';$('subtitle').textContent=page==='board'?'按电脑和发布格记录当天进度。':'维护账号资料与发布安排，支持直接编辑和自动保存。';if(typeof renderBatchControls==='function')renderBatchControls();applyPermissions();syncDailyButtons();
 }
 function edit(id){if(window.AccountInline?.hasDraft()){window.AccountInline.announceBlocked();return;}const a=data.accounts.find(a=>a.id===id)||{id:'',name:'',computer_id:'unassigned',slot:1,status:'待确认',douyin_id:'',homepage:'',note:''};lifecycleEdit(a);readinessEdit(a);phoneDeviceEdit(a);$('editId').value=a.id;$('editPlacement').open=!a.id;$('editOfficeGroup').value=a.office_group||(a.id?'':activeOffice==='three'?'three':'');$('editTitle').textContent=a.id?`编辑账号 · ${a.name}`:'新增账号 / 小号';$('editName').value=a.name;$('editComputer').innerHTML=data.computers.map(c=>`<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('');$('editComputer').value=a.computer_id;$('editSlot').value=a.slot||1;$('editStatus').innerHTML=data.statuses.map(s=>`<option>${esc(s)}</option>`).join('');$('editStatus').value=a.status;$('editDouyin').value=a.douyin_id;$('editHomepage').value=a.homepage;$('editNote').value=a.note;$('editError').textContent='';ScopeUI.mount('editForm',data,'accounts',a);$('editor').showModal();captureVersions('editor');applyAccountPermissions(a);accountEditBaseline=a.id?accountEditValues():{};}
-document.addEventListener('click',async e=>{const collect=e.target.closest('[data-collect]');if(collect)await startBoardCollection([collect.dataset.collect],collect);const nav=e.target.closest('[data-page]');if(nav&&!e.ctrlKey&&!e.metaKey&&!e.shiftKey&&!e.altKey){e.preventDefault();if(window.DeviceInline?.hasDraft()){window.DeviceInline.announceBlocked();return;}if(window.CardInline?.hasDraft()){window.CardInline.announceBlocked();return;}window.AccountPilot?.remember();page=nav.dataset.page;const target=new URL(nav.href,location.href);const office=target.searchParams.get('office');if(office&&officeDefinitions.some(item=>item.id===office)){activeOffice=office;if(page==='cards'&&[...$('cardOfficeFilter').options].some(option=>option.value===office))$('cardOfficeFilter').value=office;}history.replaceState(null,'',target.pathname+target.search);render();}const editor=e.target.closest('[data-edit]');if(editor)edit(editor.dataset.edit);const toggle=e.target.closest('[data-publish]');if(toggle)await toggleDaily(toggle.dataset.publish);});
-$('accountsBody').addEventListener('change',e=>{if(e.target.dataset.select){const id=e.target.dataset.select;e.target.checked?selected.add(id):selected.delete(id);render();}});
-$('selectAll').onchange=()=>{filtered().forEach(a=>$('selectAll').checked?selected.add(a.id):selected.delete(a.id));render();};
-$('applyBulk').onclick=async()=>{if(!selected.size)return toast('请先勾选账号');const ids=[...selected],status=$('bulkStatus').value,requestKey='bulk-status:'+ids.slice().sort().join(',')+':'+status;try{await api('/api/bulk-status',{ids,status,request_id:claimRequestId(requestKey)});settleRequestId(requestKey);selected.clear();await load();toast('账号状态已批量更新');}catch(error){settleRequestId(requestKey,error);toast(error.message);}};
+function accountScopeReady(){
+ if(window.AccountPaged?.canAct()!==false)return true;
+ toast('账号清单正在更新，请稍后再试');
+ return false;
+}
+document.addEventListener('click',async event=>{
+ const target=event.target;
+ const collect=target.closest('[data-collect]');
+ if(collect){if(accountScopeReady())await startBoardCollection([collect.dataset.collect],collect);return;}
+ const nav=target.closest('[data-page]');
+ if(nav&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&!event.altKey){
+  for(const editor of [window.AccountInline,window.CardInline,window.DeviceInline,window.EmployeeCardLink]){
+   if(editor?.hasDraft()){event.preventDefault();editor.announceBlocked();return;}
+  }
+  // Leave a paged document through the normal URL so no partial snapshot can
+  // render a different office or business page.
+  if(window.AccountPaged?.active()&&nav.dataset.page!=='accounts')return;
+  event.preventDefault();
+  window.AccountPaged?.cancelPending();
+  window.AccountPilot?.remember();
+  page=nav.dataset.page;
+  const url=new URL(nav.href,location.href),office=url.searchParams.get('office');
+  if(office&&officeDefinitions.some(item=>item.id===office)){
+   activeOffice=office;
+   if(page==='cards'&&[...$('cardOfficeFilter').options].some(option=>option.value===office))$('cardOfficeFilter').value=office;
+  }
+  history.replaceState(null,'',url.pathname+url.search);
+  if(window.AccountPaged?.eligible())await AccountPaged.load(1);
+  else if(window.AccountPaged?.active())await AccountPaged.ensureLegacy();
+  else if(data)render();
+  else await load();
+  return;
+ }
+ const editor=target.closest('[data-edit]');
+ if(editor){
+  const id=editor.dataset.edit;
+  if(!accountScopeReady()||window.AccountPaged?.active()&&!await AccountPaged.ensureLegacy())return;
+  if(!data?.accounts.some(account=>account.id===id))return toast('账号资料已变化，请刷新核对');
+  edit(id);
+ }
+ const toggle=target.closest('[data-publish]');
+ if(toggle&&accountScopeReady())await toggleDaily(toggle.dataset.publish);
+});
+$('accountsBody').addEventListener('change',event=>{
+ if(!event.target.dataset.select)return;
+ const id=event.target.dataset.select;
+ if(!accountScopeReady()){event.target.checked=selected.has(id);return;}
+ event.target.checked?selected.add(id):selected.delete(id);
+ render();
+});
+function selectAllMatching(event){
+ const box=event.currentTarget;
+ if(!accountScopeReady()){render();return;}
+ const ids=window.AccountPaged?.active()?AccountPaged.matchingIds():filtered().map(account=>String(account.id));
+ for(const id of ids)box.checked?selected.add(id):selected.delete(id);
+ render();
+}
+$('selectAll').onchange=selectAllMatching;
+$('applyBulk').onclick=async()=>{
+ if(!accountScopeReady())return;
+ if(!selected.size)return toast('请先勾选账号');
+ const ids=[...selected],status=$('bulkStatus').value;
+ if(window.AccountPaged?.active()&&(!await AccountPaged.ensureLegacy()||ids.some(id=>!selected.has(id))))return toast('可操作范围已变化，请重新勾选');
+ const requestKey='bulk-status:'+ids.slice().sort().join(',')+':'+status;
+ try{await api('/api/bulk-status',{ids,status,request_id:claimRequestId(requestKey)});settleRequestId(requestKey);selected.clear();await load();toast('账号状态已批量更新');}
+ catch(error){settleRequestId(requestKey,error);toast(error.message);}
+};
 $('closeDialog').onclick=()=>$('editor').close();
 let accountEditBaseline={};
 function accountEditValues(){return {...ScopeUI.payload('editForm'),...lifecyclePayload(),...readinessPayload(),phone_device_id:$('editPhoneDevice').value||null,name:$('editName').value,computer_id:$('editComputer').value,slot:Number($('editSlot').value),status:$('editStatus').value,note:$('editNote').value,douyin_id:$('editDouyin').value,homepage:$('editHomepage').value};}
@@ -311,10 +399,53 @@ $('editForm').onsubmit=async event=>{
   }else{await api('/api/account/create',{...values,office_group:$('editOfficeGroup').value,request_id:claimRequestId(requestKey)});settleRequestId(requestKey);$('editor').close();await load();toast('已保存，两个页面已同步');}
  }catch(error){settleRequestId(requestKey,error);$('editError').textContent=error.message;}finally{button.disabled=false;}
 };
-accountSearchFields.forEach(id=>{$(id).oninput=()=>{activeLifecyclePreset='';if(window.AccountPilot?.enabled())window.AccountPilot.scheduleFilter();else render();};$(id).onkeydown=event=>{if(event.key==='Enter'){event.preventDefault();activeLifecyclePreset='';window.AccountPilot?.cancelFilter();render();}};});['computer','status','published','loginPhoneFilter','verificationFilter'].forEach(id=>$(id).onchange=render);$('date').onchange=()=>{selected.clear();if(data)return loadPublished($('date').value);};$('today').onclick=()=>{if(!data)return;$('date').value=data.today;return loadPublished(data.today);};$('refresh').onclick=load;$('clear').onclick=()=>{window.AccountPilot?.resetFilters();clearAccountSearch();activeLifecyclePreset='';['query','computer','status','published','accountType','lifecycleFilter','ageFilter','loginPhoneFilter'].forEach(id=>$(id).value='');selected.clear();render();};async function refreshFromFocus(){if(!data)return;if(window.boardLiveSync)return;const editing=['editor','cardEditor','phoneDeviceEditor','publishingMatchDialog','verificationEditor','batchEditor','employeeCardLinkDialog'].some(id=>$(id)?.open);if(Number.isInteger(data.cursor)&&typeof catchUpBoard==='function'){await catchUpBoard();return;}if(!editing)await load();}
+function refreshAccountFilter(){if(window.AccountPaged?.intent())AccountPaged.schedule();else if(window.AccountPilot?.enabled())window.AccountPilot.scheduleFilter();else render();}
+accountSearchFields.forEach(id=>{
+ $(id).oninput=()=>{activeLifecyclePreset='';refreshAccountFilter();};
+ $(id).onkeydown=event=>{
+  if(event.key!=='Enter')return;
+  event.preventDefault();activeLifecyclePreset='';window.AccountPilot?.cancelFilter();
+  if(window.AccountPaged?.eligible())void AccountPaged.load(1);
+  else refreshAccountFilter();
+ };
+});
+for(const id of ['computer','status','published','loginPhoneFilter','verificationFilter'])$(id).onchange=refreshAccountFilter;
+function changeBoardDate(day){
+ if(!data)return;
+ if(window.AccountInline?.hasDraft()||window.DeviceInline?.hasDraft()||window.CardInline?.hasDraft()||window.EmployeeCardLink?.hasDraft()){
+  $('date').value=data.date;
+  for(const editor of [window.AccountInline,window.DeviceInline,window.CardInline,window.EmployeeCardLink])if(editor?.hasDraft())editor.announceBlocked();
+  return;
+ }
+ selected.clear();
+ if(window.AccountPaged?.active())return AccountPaged.load(1);
+ return loadPublished(day);
+}
+$('date').onchange=()=>changeBoardDate($('date').value);
+$('today').onclick=()=>{if(data){$('date').value=data.today;return changeBoardDate(data.today);}};
+$('refresh').onclick=()=>load();
+$('clear').onclick=()=>{
+ window.AccountPilot?.resetFilters();clearAccountSearch();activeLifecyclePreset='';
+ for(const id of ['query','computer','status','published','accountType','lifecycleFilter','ageFilter','loginPhoneFilter'])$(id).value='';
+ selected.clear();refreshAccountFilter();
+};
+$('accountSupplement')?.addEventListener('toggle',event=>{
+ if(event.target.open&&window.AccountPaged?.active())void AccountPaged.ensureLegacy();
+});
+async function refreshFromFocus(){
+ if(!data||window.boardLiveSync)return;
+ const editing=['editor','cardEditor','phoneDeviceEditor','publishingMatchDialog','verificationEditor','batchEditor','employeeCardLinkDialog'].some(id=>$(id)?.open);
+ if(window.AccountPaged?.active()){if(!editing)await AccountPaged.load(undefined,{background:true});return;}
+ if(Number.isInteger(data.cursor)&&typeof catchUpBoard==='function'){await catchUpBoard();return;}
+ if(!editing)await load();
+}
 window.addEventListener('focus',()=>{const job=refreshFromFocus();job.catch(()=>{});return job;});openBoard();
 
 function collectionScopeSnapshot(explicitIds){
+ if(window.AccountPaged?.active()&&explicitIds===undefined){
+  const ids=AccountPaged.matchingIds().filter(id=>!selected.size||selected.has(id)).sort();
+  return {ids,label:selected.size?`已选 ${ids.length} 个账号`:`当前筛选 ${ids.length} 个账号`,rejected:false};
+ }
  const rows=explicitIds!==undefined?(data?.accounts||[]):(typeof filtered==='function'?filtered():[]).filter(row=>page!=='board'||row.computer_id!=='unassigned');
  const allowed=new Set(rows.map(row=>String(row.id))),picked=explicitIds!==undefined?new Set(explicitIds.map(String)):selected.size?new Set([...selected].map(String)):null;
  const ids=[...new Set(rows.filter(row=>!picked||picked.has(String(row.id))).map(row=>String(row.id)))].sort();
@@ -455,7 +586,7 @@ async function queue(ids,trigger){
  finally{collectionSubmitting=false;void refreshBoardCollection();}
 }
 $('collectVisible').onclick=()=>startBoardCollection();$('collectSelected').onclick=()=>startBoardCollection();
-if($('collectionStart'))$('collectionStart').onclick=()=>startBoardCollection();
+ if($('collectionStart'))$('collectionStart').onclick=()=>{if(accountScopeReady())return startBoardCollection();};
 if($('collectionPause'))$('collectionPause').onclick=pauseBoardCollection;
 document.addEventListener('toggle',event=>{if(event.target.open&&event.target.contains($('collectionBar')))void refreshBoardCollection();},true);
 window.addEventListener('focus',()=>{if(['board','accounts'].includes(page))void refreshBoardCollection();});
