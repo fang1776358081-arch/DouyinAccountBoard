@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import sys
 import tempfile
 import importlib.util
 import unittest
@@ -365,6 +366,85 @@ class GoWorkerTest(unittest.TestCase):
         self.assertFalse(worker.collect({**JOB,'homepage':''},once=True))
         self.assertEqual(worker.query.call_args.args[0]['homepage'],PROFILE_URL)
         body=worker.deliver.call_args.args[1];self.assertIn('error',body);self.assertNotIn('count',body)
+
+    def test_unknown_handle_reaches_configured_skill_and_delivers_exact_result(self):
+        job={**JOB,'homepage':''}
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder)
+            script=root/'synthetic_search.py'
+            script.write_text(
+                "import json, sys\n"
+                "from pathlib import Path\n"
+                "args = sys.argv[1:]\n"
+                "assert args[0] == 'query' and '--headed' not in args and '--interactive' not in args\n"
+                "source = Path(args[args.index('--input') + 1])\n"
+                "assert json.loads(source.read_text()) == [{'account': '0012345678'}]\n"
+                "report = Path(args[args.index('--output') + 1]) / 'synthetic-report'\n"
+                "report.mkdir()\n"
+                f"row = {{'status': 'success', 'account': '0012345678', 'url': {PROFILE_URL!r}, 'count': 0}}\n"
+                "(report / 'results.json').write_text(json.dumps({'results': [row]}))\n",
+                encoding='utf-8',
+            )
+            runtime={**ENV,'DOUYIN_BOARD_F2_PYTHON':sys.executable,
+                     'DOUYIN_BOARD_F2_PROFILE':folder,'DOUYIN_BOARD_F2_OUTPUT':str(root/'output'),
+                     'DOUYIN_BOARD_F2_HANDLE_SEARCH_SCRIPT':str(script),'DOUYIN_BOARD_F2_HEADLESS':'1'}
+            with patch.dict(os.environ,runtime,clear=True):
+                worker=f2_worker.Worker()
+                worker.configure_runtime()
+                worker.heartbeat=Mock()
+                worker.deliver=Mock(return_value=True)
+                self.assertTrue(worker.collect(job,once=True))
+        body=worker.deliver.call_args.args[1]
+        self.assertEqual(body['count'],0)
+        self.assertEqual(body['source_url'],PROFILE_URL)
+        self.assertEqual(body['matched_douyin_id'],JOB['douyin_id'])
+
+    def test_optional_search_pauses_only_search_and_does_not_replace_conflicts(self):
+        job={**JOB,'homepage':''}
+        worker=self.worker()
+        worker.handle_search_script=Path('synthetic-search')
+        worker.profiles=f2_worker.ProfileIndex({JOB['douyin_id']:{PROFILE_URL,PROFILE_URL+'Other'}})
+        worker.query=Mock()
+        worker.deliver=Mock(return_value=False)
+        self.assertFalse(worker.collect(job,once=True))
+        worker.query.assert_not_called()
+        self.assertTrue(worker.deliver.call_args.args[1]['profile_required'])
+        worker.profiles=f2_worker.ProfileIndex()
+        worker.query.return_value={'status':'failed','error':'SearchNeedsVerification'}
+        self.assertFalse(worker.collect(job,once=True))
+        worker.query.assert_called_once_with(job)
+        result=worker.deliver.call_args.args[1]
+        self.assertFalse(result['blocked'])
+        self.assertNotIn('count',result)
+        self.assertTrue(worker.handle_search_paused)
+        worker.query.reset_mock()
+        self.assertFalse(worker.collect({**job,'douyin_id':'0009'},once=True))
+        worker.query.assert_not_called()
+        self.assertTrue(worker.deliver.call_args.args[1]['profile_required'])
+        worker.query.return_value={'status':'success','account':JOB['douyin_id'],'url':PROFILE_URL,'count':0}
+        worker.deliver.return_value=True
+        self.assertTrue(worker.collect(JOB,once=True))
+        worker.query.assert_called_once_with(JOB)
+        self.assertEqual(worker.deliver.call_args.args[1]['count'],0)
+
+    def test_account_failures_do_not_pause_other_queued_accounts(self):
+        worker=self.worker()
+        worker.deliver=Mock(return_value=False)
+        worker.query=Mock(return_value={'status':'failed','error':'ProfileUnavailable'})
+        for index in range(5):
+            worker.collect({**JOB,'account_id':f'synthetic-{index}'},once=True)
+        self.assertEqual(worker.failures,0)
+        self.assertEqual(worker.deliver.call_count,5)
+        self.assertTrue(all(not call.args[1]['blocked'] for call in worker.deliver.call_args_list))
+        worker.query.return_value={'status':'success','account':JOB['douyin_id'],'url':PROFILE_URL,'count':0}
+        worker.deliver.return_value=True
+        self.assertTrue(worker.collect(JOB,once=True))
+        self.assertEqual(worker.deliver.call_args.args[1]['count'],0)
+
+    def test_exact_handle_search_rejects_untrusted_links(self):
+        job={**JOB,'homepage':''}
+        row={'status':'success','account':job['douyin_id'],'count':2,'url':PROFILE_URL+'?x=y'}
+        self.assertNotIn('count',f2_worker.result_body(job,row))
 
     def test_idle_worker_does_not_open_any_browser_automatically(self):
         worker=self.worker();worker.browser_control=True;worker.launch=Mock()

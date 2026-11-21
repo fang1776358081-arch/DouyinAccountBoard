@@ -81,7 +81,7 @@ def original_script():
 
 ERRORS={'LoginRequired':'抖音登录已失效，请在独立采集浏览器中重新登录',
         'SearchNeedsVerification':'抖音搜索需要安全验证，请在采集浏览器中手动完成',
-        'SearchUnavailable':'没有搜索到抖音号完全一致的账号，请核对真实抖音号',
+        'SearchUnavailable':'抖音搜索未返回可核验的账号，请核对完整抖音号或稍后重试',
         'IdentityMismatch':'账号身份校验失败，未更新数量',
         'ProfileMissing':'缺少已确认主页，请补充主页后再采集',
         'ProfileConflict':'历史主页记录有冲突，请核对主页后再采集',
@@ -89,6 +89,7 @@ ERRORS={'LoginRequired':'抖音登录已失效，请在独立采集浏览器中�
         'CollectorStartupFailed':'采集程序未返回有效报告，请检查运行环境和浏览器',
         'CollectorTimedOut':'抖音采集超时，请检查采集器网络'}
 BLOCKED_ERRORS={'LoginRequired','SearchNeedsVerification','CollectorStartupFailed'}
+ACCOUNT_ERRORS={ERRORS[code] for code in ('SearchUnavailable','IdentityMismatch','ProfileUnavailable')}
 HTTP_STAGES={'/api/collection/heartbeat':'心跳','/api/collection/next':'领取任务','/api/collection/result':'结果回填'}
 HTTP_CATEGORIES={'invalid_sampling_time':'采样时间无效','unknown':'未分类HTTP错误'}
 
@@ -121,12 +122,13 @@ def result_body(job,row):
     body={'account_id':job['account_id'],'token':job['token']}
     if row.get('status')=='success':
         homepage=bound_homepage(job)
-        if ((job['douyin_id'] and row.get('account')!=job['douyin_id'])
-                or (homepage and row.get('url')!=homepage)):
+        source=canonical_profile(row.get('url'))
+        if (not source or (job['douyin_id'] and row.get('account')!=job['douyin_id'])
+                or (homepage and source!=homepage)):
             return {**body,'error':ERRORS['IdentityMismatch']}
         if type(row.get('count')) is not int or row['count']<0:
             return {**body,'error':ERRORS['ProfileUnavailable']}
-        return {**body,'count':row.get('count'),'source_url':row.get('url'),
+        return {**body,'count':row['count'],'source_url':source,
                 'matched_douyin_id':row.get('account')}
     error=row.get('error')
     if not isinstance(error,str):error='RuntimeError'
@@ -152,6 +154,8 @@ class Worker:
         self.browser_control=False
         self.browser=None
         self.profiles=ProfileIndex()
+        self.handle_search_script=None
+        self.handle_search_paused=False
         self.waiting_for_resume=wait_for_resume
 
     def configure_runtime(self):
@@ -167,6 +171,12 @@ class Worker:
         self.script=original_script()
         if not self.python.is_file() or not self.script.is_file():
             raise ValueError('采集程序或 Python 运行环境不存在')
+        search_script=os.environ.get('DOUYIN_BOARD_F2_HANDLE_SEARCH_SCRIPT','').strip()
+        if search_script:
+            path=Path(search_script).expanduser()
+            if not path.is_absolute() or not path.is_file():
+                raise ValueError('抖音号搜索技能必须是本机已安装的脚本文件')
+            self.handle_search_script=path.resolve()
         if not self.profile.is_dir():
             raise ValueError('独立采集浏览器目录不存在，请先完成登录')
         browser=os.environ.get('DOUYIN_BOARD_F2_BROWSER','')
@@ -198,10 +208,10 @@ class Worker:
         }).get('command')
         if command:self.command=command
 
-    def launch(self,args,stdin=None):
+    def launch(self,args,stdin=None,*,script=None):
         child_env={key:value for key,value in os.environ.items()
                    if not key.startswith(('DOUYIN_BOARD_','BOARD_GO_')) and key not in ('DATABASE_URL','PGPASSWORD','PGPASSFILE')}
-        command=[str(self.python),'-X','utf8',str(original_script()),*args,'--profile',str(self.profile)]
+        command=[str(self.python),'-X','utf8',str(script or original_script()),*args,'--profile',str(self.profile)]
         if self.browser:command.extend(['--browser-executable',str(self.browser)])
         return subprocess.Popen(command,
             stdin=stdin,stdout=subprocess.DEVNULL,
@@ -223,15 +233,19 @@ class Worker:
         process.wait()
 
     def query(self,job):
-        try:homepage=self.profiles.resolve(job['douyin_id'],job.get('homepage'))
+        handle=job['douyin_id']
+        try:homepage=self.profile_for_job(job)
         except ProfileRequired as error:return {'status':'failed','error':error.code}
         folder=Path(tempfile.mkdtemp(prefix='job-',dir=self.output))
         source=folder/'accounts.json'
-        handle=job['douyin_id']
-        item={'url':homepage,'account':handle} if handle else {'url':homepage}
+        item={'account':handle} if handle else {}
+        if homepage:item['url']=homepage
         source.write_text(json.dumps([item]),encoding='utf-8')
         args=['query','--input',str(source),'--output',str(folder),'--max-failures','1']
-        process=self.launch(args,subprocess.DEVNULL)
+        if homepage:
+            process=self.launch(args,subprocess.DEVNULL)
+        else:
+            process=self.launch(args,subprocess.DEVNULL,script=self.handle_search_script)
         started=time.monotonic()
         try:
             while process.poll() is None:
@@ -253,21 +267,40 @@ class Worker:
             except (OSError,ValueError,KeyError,TypeError):pass
         return {'status':'failed','error':'CollectorStartupFailed'}
 
+    def profile_for_job(self,job):
+        handle=job['douyin_id']
+        try:
+            return self.profiles.resolve(handle,job.get('homepage'))
+        except ProfileRequired as error:
+            if (self.handle_search_script is not None and not self.handle_search_paused
+                    and error.code=='ProfileMissing'
+                    and isinstance(handle,str) and re.fullmatch(r'[A-Za-z0-9_.-]{1,64}',handle)
+                    and not re.fullmatch(r'MS4w[A-Za-z0-9_-]+',handle)):
+                return ''
+            raise
+
     def collect(self,job,*,once=False):
         active=job
         try:
-            active={**job,'homepage':self.profiles.resolve(job['douyin_id'],job.get('homepage'))}
+            active={**job,'homepage':self.profile_for_job(job)}
             row=self.query(active)
         except ProfileRequired as error:row={'status':'failed','error':error.code}
         except (OSError,ValueError):row={'status':'failed','error':'CollectorStartupFailed'}
         body=result_body(active,row)
+        search_blocked=not active.get('homepage') and row.get('error')=='SearchNeedsVerification'
+        if search_blocked:
+            self.handle_search_paused=True
+            body.update(blocked=False,error='抖音搜索需要安全验证，已绑定主页的账号继续采集')
         # Capture once, before delivery retries. Server receipt time may be late.
         # A missing profile never started a query, so no sampling event exists.
         if not body.get('profile_required'):
             body['sampled_at']=datetime.now(timezone.utc).isoformat(timespec='microseconds')
-        if not body.get('profile_required'):self.failures=self.failures+1 if body.get('error') else 0
-        if not body.get('profile_required') and self.failures>=3:
-            body.update(blocked=True,error=body['error']+'；连续3次失败，队列暂停，请检查后继续')
+            if not body.get('error') or search_blocked or body['error'] in ACCOUNT_ERRORS:
+                self.failures=0
+            else:
+                self.failures+=1
+                if self.failures>=3:
+                    body.update(blocked=True,error=body['error']+'；连续3次服务失败，队列暂停，请检查后继续')
         return self.deliver(job,body,once=once)
 
     def delivery_receipt(self,job,body,result):
@@ -342,6 +375,7 @@ class Worker:
         if command=='resume':
             self.waiting_for_resume=False
             self.failures=0
+            self.handle_search_paused=False
             if self.login and self.login.poll() is None:
                 self.login.stdin.write(b'\n');self.login.stdin.flush()
         if not self.login and not self.waiting_for_resume:

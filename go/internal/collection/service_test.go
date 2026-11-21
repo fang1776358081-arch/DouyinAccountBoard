@@ -360,6 +360,17 @@ func TestManualCollectionSyntheticPostgreSQL(t *testing.T) {
 		"count": 0, "source_url": "https://www.douyin.com/user/MS4wSyntheticFixture", "matched_douyin_id": "0043"}, 200)
 	call("POST", EnqueuePath, "employee", request(102, "go-east-account"), 200)
 	job = call("GET", "/api/collection/next", "worker", nil, 200)["job"].(payload)
+	var permissionsBefore, lastBeforeFailure string
+	if err := db.QueryRowContext(ctx, `SELECT last_collected,
+		(SELECT jsonb_object_agg(id::text,permissions)::text FROM auth_users)
+		FROM accounts WHERE id='go-east-account'`).Scan(&lastBeforeFailure, &permissionsBefore); err != nil {
+		t.Fatal(err)
+	}
+	// Leave the next account queued before the failure, so cancelling or pausing the
+	// remaining queue would fail this regression instead of being hidden by a new enqueue.
+	if reply := call("POST", EnqueuePath, "owner", request(103, "go-west-account"), 200); reply["queued"] != float64(1) {
+		t.Fatal("the following account did not enter the waiting queue")
+	}
 	call("POST", "/api/collection/result", "worker", payload{"account_id": job["account_id"], "token": job["token"],
 		"error": "missing:其他错误", "profile_required": true, "blocked": false}, 200)
 	if err := db.QueryRowContext(ctx, `SELECT work_count,collection_state,collection_error,
@@ -368,5 +379,33 @@ func TestManualCollectionSyntheticPostgreSQL(t *testing.T) {
 	}
 	if count != 0 || state != "采集失败" || message != safeMessage("missing:其他错误") || paused != 0 {
 		t.Fatal("zero result or unknown profile protocol was misclassified")
+	}
+	job = call("GET", "/api/collection/next", "worker", nil, 200)["job"].(payload)
+	if job["account_id"] != "go-west-account" || job["douyin_id"] != "0050" {
+		t.Fatal("an ordinary account failure interrupted the following queued account")
+	}
+	call("POST", "/api/collection/result", "worker", payload{"account_id": job["account_id"], "token": job["token"],
+		"count": 12, "source_url": "https://www.douyin.com/user/MS4wSyntheticAfterFailure", "matched_douyin_id": "0050",
+		"sampled_at": time.Now().UTC().Format(time.RFC3339Nano)}, 200)
+	var followingCount int
+	var followingState, permissionsAfter string
+	if err := db.QueryRowContext(ctx, `SELECT work_count,collection_state,last_collected,status,
+		(SELECT work_count FROM accounts WHERE id='go-west-account'),
+		(SELECT collection_state FROM accounts WHERE id='go-west-account'),
+		(SELECT paused FROM collection_settings WHERE id=1),
+		(SELECT jsonb_object_agg(id::text,permissions)::text FROM auth_users)
+		FROM accounts WHERE id='go-east-account'`).
+		Scan(&count, &state, &preservedLast, &accountStatus, &followingCount, &followingState, &paused, &permissionsAfter); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || state != "采集失败" || preservedLast != lastBeforeFailure || accountStatus != "正常" ||
+		followingCount != 12 || followingState != "采集成功" || paused != 0 || permissionsAfter != permissionsBefore {
+		t.Fatal("failure continuation changed prior success, business status, permissions or queue state")
+	}
+	if reply := call("GET", "/api/collection/jobs?state=采集成功", "employee", nil, 200); reply["total"] != float64(0) {
+		t.Fatal("the following success leaked outside the employee office")
+	}
+	if reply := call("GET", "/api/collection/next", "worker", nil, 200); reply["job"] != nil {
+		t.Fatal("completion left an unexpected current worker job")
 	}
 }
